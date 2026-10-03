@@ -1,4 +1,4 @@
-"""LiveSubs backend: yt-dlp (audio slice) -> Qwen3-ASR + ForcedAligner -> local LLM translate -> Netflix-style cues.
+"""LiveSubs backend: full-audio download -> local ffmpeg slice -> Qwen3-ASR + ForcedAligner -> local LLM translate -> Netflix-style cues.
 Run: python server.py   (listens on 127.0.0.1:8765)
 """
 import os, re, json, sys, time, wave, shutil, threading, tempfile, subprocess, textwrap, traceback
@@ -38,8 +38,123 @@ MAXC, MIN_DUR, GAP = 42, 1.0, 0.05
 CPS = float(os.getenv("CPS", "17"))
 
 ASR = None
-PUNCT = set("，。！？；：、,.!?;:…—-\"'“”‘’（）() \n")
+PUNCT = set("，。！？；：、,.!?;:…—-\"'""''（）() \n")
 SENT = re.compile(r"[^。！？!?；;…]+[。！？!?；;…]*")
+
+# ============================================================================
+#  FULL-AUDIO DOWNLOAD MANAGER
+#  Downloads the complete audio track once per video, then all blocks are
+#  sliced locally with ffmpeg (sub-second, zero network).
+# ============================================================================
+
+class AudioNotReady(Exception):
+    """Raised when block processing should wait for the full audio download."""
+    pass
+
+_downloads = {}        # vid -> {"status", "progress", "path", "error"}
+_dl_lock = threading.Lock()
+
+AUDIO_EXTS = ("webm", "m4a", "opus", "ogg", "mp4", "mp3", "wav")
+
+def _find_full_audio(vid):
+    """Return path to a completed full audio file, or None."""
+    vdir = CACHE / vid
+    if not vdir.is_dir():
+        return None
+    for ext in AUDIO_EXTS:
+        p = vdir / f"full.{ext}"
+        # .part file means download is still in progress
+        if p.exists() and not p.with_suffix(f".{ext}.part").exists() and not (vdir / f"full.{ext}.part").exists():
+            return p
+    return None
+
+def _download_audio(vid):
+    """Background thread: download the complete audio track for a video."""
+    vdir = CACHE / vid; vdir.mkdir(exist_ok=True)
+    dlog(f"[DL] starting full audio download for {vid}")
+    t0 = time.time()
+    cmd = [sys.executable, "-m", "yt_dlp",
+           "--no-playlist", "--newline",
+           "-f", "ba[abr<=64]/ba/b",
+           "-o", str(vdir / "full.%(ext)s"),
+           f"https://www.youtube.com/watch?v={vid}"]
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, text=True)
+        for line in p.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            # Parse progress: "[download]  45.2% of ~163.40MiB at  1.50MiB/s ETA 01:30"
+            m = re.search(r"(\d+\.?\d*)%", line)
+            if m:
+                pct = float(m.group(1))
+                with _dl_lock:
+                    _downloads[vid]["progress"] = pct
+                if int(pct) % 10 == 0:   # log every ~10%
+                    dlog(f"[DL] {vid}: {pct:.1f}%")
+            elif "[download]" in line.lower() or "[error]" in line.lower() or "error" in line.lower():
+                dlog(f"[DL] {vid}: {line[:200]}")
+        p.wait()
+        if p.returncode != 0:
+            raise RuntimeError(f"yt-dlp exited with code {p.returncode}")
+        full = _find_full_audio(vid)
+        if not full:
+            raise RuntimeError("yt-dlp produced no audio file")
+        elapsed = time.time() - t0
+        size_mb = full.stat().st_size / 1e6
+        with _dl_lock:
+            _downloads[vid]["status"] = "ready"
+            _downloads[vid]["path"] = full
+            _downloads[vid]["progress"] = 100.0
+        dlog(f"[DL] {vid}: download complete -> {full.name} ({size_mb:.1f} MB) in {elapsed:.0f}s")
+    except Exception as ex:
+        dlog(f"[DL] {vid}: download FAILED: {ex}")
+        with _dl_lock:
+            _downloads[vid]["status"] = "error"
+            _downloads[vid]["error"] = str(ex)
+        try:
+            with DEVLOG.open("a", encoding="utf-8") as f:
+                f.write(traceback.format_exc() + "\n")
+        except Exception:
+            pass
+
+def ensure_audio(vid):
+    """Ensure the full audio for `vid` is being downloaded.
+    Returns the Path if ready, or None if still downloading.
+    Raises RuntimeError on download error (will be retried)."""
+    # Fast path: file already on disk
+    full = _find_full_audio(vid)
+    if full:
+        with _dl_lock:
+            _downloads[vid] = {"status": "ready", "path": full, "progress": 100.0, "error": None}
+        return full
+
+    with _dl_lock:
+        info = _downloads.get(vid)
+        if info is None:
+            # First request for this video — start download
+            _downloads[vid] = {"status": "downloading", "path": None, "progress": 0.0, "error": None}
+            threading.Thread(target=_download_audio, args=(vid,), daemon=True, name=f"dl-{vid}").start()
+            return None
+        if info["status"] == "ready":
+            return info.get("path")
+        if info["status"] == "error":
+            # Reset and retry the download
+            dlog(f"[DL] {vid}: retrying after previous error: {info.get('error','?')}")
+            _downloads[vid] = {"status": "downloading", "path": None, "progress": 0.0, "error": None}
+            threading.Thread(target=_download_audio, args=(vid,), daemon=True, name=f"dl-{vid}").start()
+            return None
+        # status == "downloading" — still in progress
+        return None
+
+def download_progress(vid):
+    """Return (status, progress_pct) for the audio download."""
+    with _dl_lock:
+        info = _downloads.get(vid)
+        if info is None:
+            return ("none", 0.0)
+        return (info["status"], info.get("progress", 0.0))
 
 # ---------------- cache housekeeping ----------------
 def cleanup():
@@ -47,8 +162,8 @@ def cleanup():
     for d in CACHE.iterdir():
         if not d.is_dir():
             continue
-        for f in d.glob("*.json"):
-            if f.stat().st_mtime < cutoff:
+        for f in d.iterdir():
+            if f.is_file() and f.stat().st_mtime < cutoff:
                 f.unlink()
         if not any(d.iterdir()):
             d.rmdir()
@@ -57,32 +172,29 @@ def cpath(vid, i):
     d = CACHE / vid; d.mkdir(exist_ok=True)
     return d / f"{i}.json"
 
-# ---------------- audio ----------------
+# ---------------- audio (local slicing from full download) ----------------
 def grab(vid, a, b, outdir: Path):
+    """Slice a section from the locally-cached full audio file.
+    Raises AudioNotReady if the download hasn't completed yet."""
+    full = ensure_audio(vid)
+    if full is None:
+        raise AudioNotReady(vid)
+
     t0 = time.time()
-    cmd = [sys.executable, "-m", "yt_dlp", "--no-playlist", "-q", "-f", "ba[abr<=64]/ba/b",
-           "--js-runtimes", "node",
-           "--download-sections", f"*{a:.2f}-{b:.2f}",
-           "-x", "--audio-format", "wav",
-           "--postprocessor-args", "ExtractAudio:-ar 16000 -ac 1",
-           "-o", str(outdir / "a.%(ext)s"),
-           f"https://www.youtube.com/watch?v={vid}"]
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         stdin=subprocess.DEVNULL, text=True)
-    try:
-        out, _ = p.communicate(timeout=300)
-    except subprocess.TimeoutExpired:
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
-                       capture_output=True, stdin=subprocess.DEVNULL)
-        p.wait()
-        raise RuntimeError("yt-dlp: audio download timed out after 5 min (slow network or YouTube throttle)")
-    if p.returncode != 0:
-        raise RuntimeError("yt-dlp: " + (out or "")[-1500:])
-    dlog(f"audio slice {a:.0f}-{b:.0f}s fetched in {time.time()-t0:.0f}s")
-    wavs = list(outdir.glob("a.wav")) or list(outdir.glob("a.*"))
-    if not wavs:
-        raise RuntimeError("yt-dlp produced no audio")
-    return wavs[0]
+    wav = outdir / "a.wav"
+    cmd = ["ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+           "-ss", f"{a:.2f}", "-t", f"{b - a:.2f}",
+           "-i", str(full),
+           "-ar", "16000", "-ac", "1",
+           str(wav)]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
+                       stdin=subprocess.DEVNULL)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg slice failed: {r.stderr[-500:]}")
+    if not wav.exists() or wav.stat().st_size < 100:
+        raise RuntimeError("ffmpeg produced no usable wav output")
+    dlog(f"audio slice {a:.0f}-{b:.0f}s from local file in {time.time()-t0:.1f}s")
+    return wav
 
 # ---------------- ASR ----------------
 def load_asr():
@@ -272,7 +384,9 @@ def shape(sents):
         c[0], c[1], c[2] = round(c[0], 2), round(c[1], 2), wrap(c[2])
     return cues
 
-# ---------------- job queue (newest request wins, so seeking feels instant) ----------------
+# ============================================================================
+#  JOB QUEUE — sequential block priority (lowest missing block from playhead)
+# ============================================================================
 state, lastreq = {}, {}
 cv = threading.Condition()
 
@@ -308,17 +422,28 @@ def worker():
         with cv:
             while True:
                 now = time.time()
-                for k, t in list(lastreq.items()):      # drop stale queued blocks (user seeked away)
-                    if state.get(k) == "queued" and now - t > 20:
+                # Drop stale queued blocks (user seeked away >60s ago)
+                for k, t in list(lastreq.items()):
+                    if state.get(k) == "queued" and now - t > 60:
                         state.pop(k, None); lastreq.pop(k, None)
                 cand = [k for k in lastreq
                         if state.get(k) == "queued"
                         or (state.get(k) == "running:cooldown" and now >= cooldown_until.get(k, 0))]
                 if cand:
-                    key = max(cand, key=lambda k: lastreq[k]); state[key] = "running"; break
+                    # Sequential priority: lowest block index first (so playback flows)
+                    # Among different videos, prefer the one with the most recent request
+                    newest_vid = max(lastreq, key=lambda k: lastreq[k])[0]
+                    vid_cand = [k for k in cand if k[0] == newest_vid]
+                    pick = vid_cand if vid_cand else cand
+                    key = min(pick, key=lambda k: k[1])   # lowest block number
+                    state[key] = "running"; break
                 cv.wait(timeout=2)
         try:
             process(key); state.pop(key, None); fails.pop(key, None)
+        except AudioNotReady:
+            # Audio is still downloading — retry soon, don't count as failure
+            state[key] = "running:cooldown"
+            cooldown_until[key] = time.time() + 3
         except Exception as ex:
             dlog(f"block failed {key} {ex}")
             try:
@@ -327,12 +452,14 @@ def worker():
             except Exception:
                 pass
             n = fails.get(key, 0) + 1; fails[key] = n
-            wait = min(300, 10 * 2 ** (n - 1))   # 10s, 20s, 40s ... max 5 min: polite when throttled
+            wait = min(300, 10 * 2 ** (n - 1))   # 10s, 20s, 40s ... max 5 min
             state[key] = "running:cooldown"
             cooldown_until[key] = time.time() + wait
             dlog(f"block {key} retry in {wait}s (fail #{n})")
 
-# ---------------- API ----------------
+# ============================================================================
+#  API
+# ============================================================================
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -348,6 +475,13 @@ def block(v: str, i: int):
     if p.exists():
         return {"state": "ready", "cues": json.loads(p.read_text("utf-8"))}
     key = (v, i)
+
+    # Kick off the full-audio download if not started yet
+    dl_status, dl_progress = download_progress(v)
+    if dl_status == "none":
+        ensure_audio(v)
+        dl_status, dl_progress = download_progress(v)
+
     with cv:
         st = state.get(key)
         if st and st.startswith("error"):
@@ -357,6 +491,10 @@ def block(v: str, i: int):
             state[key] = "queued"
         lastreq[key] = time.time()
         cv.notify()
+
+        # Return download progress while audio is still downloading
+        if dl_status == "downloading":
+            return {"state": "downloading", "progress": round(dl_progress, 1)}
         return {"state": state[key]}
 
 def preflight():
@@ -364,8 +502,6 @@ def preflight():
     problems = []
     if not shutil.which("ffmpeg"):
         problems.append("ffmpeg not found on PATH (winget install Gyan.FFmpeg, then reopen the terminal)")
-    if not any(shutil.which(r) for r in ("node", "deno", "bun")):
-        problems.append("no JS runtime found (install Node.js LTS so yt-dlp can read YouTube pages)")
     try:
         r = requests.get(LLM_URL.rsplit("/", 2)[0] + "/models", timeout=5)
         ids = [m.get("id", "") for m in r.json().get("data", [])]

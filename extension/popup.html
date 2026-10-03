@@ -1,45 +1,88 @@
-<!doctype html>
-<meta charset="utf-8">
-<style>
-  body { width: 230px; font: 13px Arial, sans-serif; padding: 10px; }
-  label, select, button { display: block; width: 100%; margin: 6px 0; }
-  label.row { display: flex; align-items: center; gap: 8px; }
-  label.row input { width: auto; margin: 0; }
-  input[type=range] { width: 100%; margin: 2px 0 0; }
-  hr { border: none; border-top: 1px solid #ccc; margin: 10px 0; }
-  .sub { font-weight: bold; margin-top: 4px; }
-</style>
-<label class="row"><input type="checkbox" id="on"> Enable LiveSubs</label>
-<label>Prepare ahead
-  <select id="ahead">
-    <option value="60">1 min</option>
-    <option value="180">3 min</option>
-    <option value="300">5 min</option>
-    <option value="600">10 min</option>
-    <option value="900">15 min</option>
-  </select>
-</label>
-<button id="retry">Retry connection</button>
-<hr>
-<div class="sub">Subtitles</div>
-<label>Style preset
-  <select id="preset">
-    <option value="">Apply a preset…</option>
-    <option value="default">Default</option>
-    <option value="cinema">Cinema (big)</option>
-    <option value="bright">Bright yellow</option>
-    <option value="minimal">Minimal</option>
-  </select>
-</label>
-<label>Text color
-  <select id="color">
-    <option value="#ffffff">White</option>
-    <option value="#ffe600">Yellow</option>
-    <option value="#8ef6ff">Cyan</option>
-    <option value="#b9ff9e">Mint</option>
-  </select>
-</label>
-<label>Size <input type="range" id="size" min="14" max="48" step="1"></label>
-<label>Background darkness <input type="range" id="bg" min="0" max="90" step="5"></label>
-<label>Text edge <input type="range" id="edge" min="0" max="3" step="1"></label>
-<script src="popup.js"></script>
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 260px;
+      background: #1a1a1a;
+      color: #eee;
+      font: 13px Roboto, Arial, sans-serif;
+      padding: 16px;
+    }
+    .hdr {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .hdr h1 { font-size: 17px; font-weight: 700; color: #fff; }
+    .logo {
+      width: 28px; height: 28px;
+      background: linear-gradient(135deg, #FFB300, #FF8F00);
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; color: #222; font-size: 14px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 12px 0;
+    }
+    .toggle {
+      appearance: none;
+      width: 36px; height: 20px;
+      background: #444;
+      border-radius: 10px;
+      position: relative;
+      cursor: pointer;
+      outline: none;
+    }
+    .toggle:checked { background: #FFB300; }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px; left: 2px;
+      width: 16px; height: 16px;
+      background: #fff;
+      border-radius: 50%;
+      transition: .15s;
+    }
+    .toggle:checked::after { left: 18px; }
+    .dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #555;
+      margin-left: 8px;
+    }
+    .dot.ok { background: #4CAF50; }
+    .dot.err { background: #F44336; }
+    .foot {
+      margin-top: 16px;
+      font-size: 11px;
+      color: #777;
+      text-align: center;
+      border-top: 1px solid #333;
+      padding-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="hdr">
+    <div class="logo">字</div>
+    <h1>LiveSubs</h1>
+  </div>
+  <div class="row">
+    <span>Enable Translation</span>
+    <input type="checkbox" id="on" class="toggle">
+  </div>
+  <div class="row">
+    <span>Backend <span id="st" class="dot"></span></span>
+  </div>
+  <div class="foot">Controls are on the YouTube player ▸</div>
+  <script src="popup.js"></script>
+</body>
+</html>
