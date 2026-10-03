@@ -37,7 +37,7 @@ they're cached.
 
 **2. LM Studio — load the translator.**
 - Download a small **non-thinking instruct** model. Good picks:
-  - `Qwen3-4B-Instruct-2507` Q4_K_M (~2.5 GB) — fits easily next to the audio models.
+  - `Qwen3-4B-Instruct-2507` Q4_K_M (~2.5 GB) — fits easily next to the audio models. (recommended!!)
   - `Qwen2.5-7B-Instruct` Q4_K_M (~4.7 GB) — better English, tight on 8 GB.
   - Skip anything with "Thinking" or "R1" in the name.
 - Settings: port **1234**, context **4096**, full GPU offload for the 4B,
