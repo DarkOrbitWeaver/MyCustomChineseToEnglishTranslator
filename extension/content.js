@@ -39,13 +39,15 @@
   #ls-dl-label{font-size:11px;color:#aaa;margin-bottom:3px}
   #ls-dl-track{width:100%;height:4px;background:#333;border-radius:2px;overflow:hidden}
   #ls-dl-bar{height:100%;background:linear-gradient(90deg,#FFB300,#FF8F00);width:0%;transition:width .3s}
-  #ls-win{visibility:visible!important}
   #ls-panel .ls-sep{border:none;border-top:1px solid #333;margin:10px 0}
   #ls-panel label{display:flex;justify-content:space-between;align-items:center;margin:6px 0;gap:8px}
   #ls-panel select{width:140px;background:#222;color:#eee;border:1px solid #444;border-radius:4px;padding:3px 6px;font-size:12px}
   #ls-panel input[type=range]{width:140px;accent-color:#FFB300}
   #ls-panel input[type=color]{width:36px;height:22px;padding:0;border:1px solid #444;border-radius:4px;background:#222;cursor:pointer}
   #ls-btn svg{padding:8px;box-sizing:border-box}
+  #ls-win{visibility:visible!important;text-align:center;width:100%}
+  #ls-sub{display:inline-block;padding:3px 10px;border-radius:4px;font-family:'YouTube Noto',Roboto,Arial,sans-serif;
+    white-space:pre-wrap;line-height:1.4;max-width:80%}
   `;
 
   // ---- Inline SVG for the player-bar button (tiny version of the icon) ----
@@ -60,13 +62,12 @@
   // ---- Element references (re-discovered by ensureUI) ----
   const el = {};
 
-  function styleSubs(span) {
+  function styleSub(span) {
+    if (!span) return;
     span.style.fontSize = cfg.subFont + 'px';
     span.style.color = cfg.subColor || '#fff';
     span.style.background = 'rgba(0,0,0,' + (cfg.subBg / 100).toFixed(2) + ')';
-    span.style.padding = '2px 10px';
-    span.style.borderRadius = '4px';
-    const e = cfg.subEdge;
+    const e = Number(cfg.subEdge) || 0;
     span.style.textShadow = e > 0
       ? `-${e}px -${e}px 0 #000,${e}px -${e}px 0 #000,-${e}px ${e}px 0 #000,${e}px ${e}px 0 #000,0 0 ${e*3}px rgba(0,0,0,.9)`
       : 'none';
@@ -139,7 +140,7 @@
         cfg.enabled = enCb.checked;
         chrome.storage.local.set({ enabled: cfg.enabled });
         if (cfg.enabled && !online) connect();
-        if (!cfg.enabled) { online = false; }
+        if (!cfg.enabled) { online = false; hideSub(); }
       };
       presetSel.onchange = () => {
         const pr = PRESETS[presetSel.value]; if (!pr) return;
@@ -170,12 +171,34 @@
       el.btn.addEventListener('click', e => { e.stopPropagation(); el.panel.classList.toggle('open'); });
       bar.insertBefore(el.btn, bar.firstChild);
     }
+
+    // Ensure subtitle container exists
+    ensureSub();
+  }
+
+  // ---- Subtitle DOM element (independent of YouTube's caption system) ----
+  function ensureSub() {
+    const p = player(); if (!p) return null;
+    let wrap = p.querySelector('#ls-win');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = 'ls-win';
+      wrap.style.cssText = 'position:absolute;left:0;right:0;bottom:12%;text-align:center;pointer-events:none;z-index:59;';
+      const span = document.createElement('span');
+      span.id = 'ls-sub';
+      wrap.appendChild(span);
+      p.appendChild(wrap);
+      elog('subtitle element created');
+    }
+    return wrap.querySelector('#ls-sub');
   }
 
   function ensureUI() {
     const p = player();
     if (!p) return;
     if (!el.panel || !p.contains(el.panel) || !el.btn || !p.querySelector('#ls-btn')) createUI();
+    // Also ensure subtitle element exists
+    if (!p.querySelector('#ls-win')) ensureSub();
   }
 
   // ---- Backend connection ----
@@ -235,80 +258,57 @@
     const r = await api('/block?v=' + vid + '&i=' + want);
     busy = false;
     if (forVid !== vid) return;
-    if (r.error) { online = false; elog('block ' + forVid + ':' + want + ' request failed: ' + r.error); return; }
-    if (r.state === 'ready') { blocks.set(want, r.cues); dlPct = -1; }
+    if (r.error) { online = false; elog('block ' + forVid + ':' + want + ' error: ' + r.error); return; }
+    if (r.state === 'ready') {
+      blocks.set(want, r.cues);
+      dlPct = -1;
+      elog('block ' + want + ' ready (' + r.cues.length + ' cues)');
+    }
     else if (r.state === 'downloading') { dlPct = r.progress || 0; nextTry = Date.now() + 2000; }
     else if (r.state === 'error') { nextTry = Date.now() + 10000; elog('block ' + forVid + ':' + want + ' failed: ' + (r.msg || '')); }
     else { nextTry = Date.now() + 800; }
   }
 
   // ---- Render subtitles ----
+  let lastShownText = '';
   function render() {
-    const v = video(), p = player(); if (!v || !p) return;
+    const v = video(); if (!v) return;
     let text = '';
     if (cfg.enabled && online) {
       const t = v.currentTime, k = Math.floor(t / BLOCK);
       for (const j of [k, k - 1, k + 1]) {
+        if (j < 0) continue;
         const a = blocks.get(j); if (!a) continue;
         const c = a.find(c => t >= c[0] && t < c[1]);
         if (c) { text = c[2]; break; }
       }
     }
-    // Prefer YouTube's own caption layer
-    const host = p.querySelector('.ytp-caption-window-container');
-    if (host) {
-      let win = host.querySelector('#ls-win');
-      if (!cfg.enabled || !text) { if (win) win.style.display = 'none'; return; }
-      host.style.display = 'block';   // YT hides this when its own CC is off
-      if (!win) {
-        win = document.createElement('div');
-        win.id = 'ls-win';
-        win.className = 'caption-window ytp-caption-window-bottom';
-        win.setAttribute('dir', 'ltr');
-        const t = document.createElement('span');
-        t.className = 'captions-text';
-        win.appendChild(t);
-        host.appendChild(win);
-      }
-      const span = win.querySelector('.captions-text');
-      if (span.dataset.t !== text) {
-        span.dataset.t = text; span.replaceChildren();
-        text.split('\n').forEach((line, i) => {
-          if (i) span.appendChild(document.createElement('br'));
-          const s = document.createElement('span');
-          s.className = 'ytp-caption-segment';
-          s.textContent = line;
-          span.appendChild(s);
-        });
-        styleSubs(span);
-      }
-      win.style.display = 'block';
-      // Hide fallback if caption layer is available
-      const old = p.querySelector('#ls-cap'); if (old) old.style.display = 'none';
+
+    if (text === lastShownText) return;
+    lastShownText = text;
+
+    const span = ensureSub();
+    if (!span) return;
+
+    if (!text) {
+      span.parentElement.style.display = 'none';
       return;
     }
-    // Fallback overlay
-    let cap = p.querySelector('#ls-cap');
-    if (!cfg.enabled || !text) { if (cap) cap.style.display = 'none'; return; }
-    if (!cap) {
-      cap = document.createElement('div'); cap.id = 'ls-cap';
-      cap.style.cssText = 'position:absolute;left:0;right:0;bottom:11%;text-align:center;pointer-events:none;z-index:59;';
-      p.appendChild(cap);
-    }
-    if (cap.dataset.t === text) return;
-    cap.dataset.t = text; cap.replaceChildren();
-    const wrap = document.createElement('span');
-    wrap.className = 'captions-text';
-    styleSubs(wrap);
+    // Show subtitle
+    span.replaceChildren();
     text.split('\n').forEach((line, i) => {
-      if (i) wrap.appendChild(document.createElement('br'));
-      const s = document.createElement('span');
-      s.className = 'ytp-caption-segment';
-      s.style.fontFamily = "'YouTube Noto',Roboto,Arial,sans-serif";
-      s.textContent = line;
-      wrap.appendChild(s);
+      if (i) span.appendChild(document.createElement('br'));
+      span.appendChild(document.createTextNode(line));
     });
-    cap.appendChild(wrap);
+    styleSub(span);
+    span.parentElement.style.display = 'block';
+  }
+
+  function hideSub() {
+    const p = player(); if (!p) return;
+    const win = p.querySelector('#ls-win');
+    if (win) win.style.display = 'none';
+    lastShownText = '';
   }
 
   // ---- Yellow seek-bar markers for cached blocks ----
@@ -337,20 +337,22 @@
     }
   }
 
-  // ---- Badge (autohide with YT controls, except on errors) ----
+  // ---- Update chrome (status, markers, auto-pause) ----
   function paintChrome() {
-    const p = player();
-    if (!p) return;
     updateStatus();
-    // Auto-hide panel when controls hide, except during download
-    if (el.panel && el.panel.classList.contains('open') && p.classList.contains('ytp-autohide') && dlPct < 0) {
-      // Don't force-close, just let YouTube's natural behavior work
-    }
     paintMarkers();
   }
 
   // ---- Navigation & settings ----
-  function onNav() { vid = videoId(); blocks.clear(); busy = false; nextTry = 0; dlPct = -1; }
+  function onNav() {
+    vid = videoId();
+    blocks.clear();
+    busy = false;
+    nextTry = 0;
+    dlPct = -1;
+    lastShownText = '';
+    elog('nav: vid=' + vid);
+  }
 
   function applyCfg(s) {
     const was = cfg.enabled;
@@ -362,11 +364,14 @@
       if (enCb) enCb.checked = cfg.enabled;
     }
     if (cfg.enabled && !was) { elog('enabled'); connect(); }
-    if (!cfg.enabled) { online = false; }
+    if (!cfg.enabled && was) { online = false; hideSub(); }
   }
 
+  // ---- Init ----
   chrome.storage.local.get({ enabled: false, lookahead: 300, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' }, s => {
-    applyCfg(s); onNav();
+    elog('init: enabled=' + s.enabled);
+    applyCfg(s);
+    onNav();
   });
   chrome.storage.onChanged.addListener(() => {
     chrome.storage.local.get({ enabled: false, lookahead: 300, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' }, s => applyCfg(s));
