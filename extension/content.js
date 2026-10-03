@@ -4,6 +4,7 @@
   let vid = null, blocks = new Map(), busy = false, nextTry = 0, online = false;
 
   const $ = s => document.querySelector(s);
+  const elog = (m) => console.log("[LiveSubs]", m);
   const api = path => new Promise(res => chrome.runtime.sendMessage({ path }, r => res(r || { error: "no response" })));
   const video = () => $("video.html5-main-video") || $("video");
   const player = () => $("#movie_player");
@@ -40,8 +41,8 @@
     setStatus("connecting…");
     const r = await api("/health");
     online = !r.error && r.ok === true;
-    if (online) { blocks.clear(); nextTry = 0; setStatus("connected"); }
-    else setStatus("offline — click to retry");
+    if (online) { blocks.clear(); nextTry = 0; setStatus("connected"); elog("backend connected"); }
+    else { setStatus("offline — click to retry"); elog("backend unreachable"); }
   }
 
   async function tick() {
@@ -58,9 +59,9 @@
     const r = await api(`/block?v=${vid}&i=${want}`);
     busy = false;
     if (forVid !== vid) return;
-    if (r.error) { online = false; setStatus("offline — click to retry"); return; }
+    if (r.error) { online = false; setStatus("offline — click to retry"); elog(`block ${forVid}:${want} request failed: ${r.error}`); return; }
     if (r.state === "ready") blocks.set(want, r.cues);
-    else if (r.state === "error") { nextTry = Date.now() + 10000; setStatus("having trouble — retrying…"); }
+    else if (r.state === "error") { nextTry = Date.now() + 10000; setStatus("having trouble — retrying…"); elog(`block ${forVid}:${want} failed: ${r.msg || ""}`); }
     else { setStatus("preparing ahead…"); nextTry = Date.now() + 800; }
   }
 
@@ -151,8 +152,8 @@
     const was = cfg.enabled;
     cfg.enabled = s.enabled; cfg.lookahead = s.lookahead;
     cfg.subFont = s.subFont; cfg.subBg = s.subBg; cfg.subEdge = s.subEdge; cfg.subColor = s.subColor;
-    if (cfg.enabled && !was) connect();
-    if (!cfg.enabled) { online = false; setStatus("off"); }
+    if (cfg.enabled && !was) { elog("enabled"); connect(); }
+    if (!cfg.enabled) { online = false; setStatus("off"); elog("disabled"); }
   }
 
   chrome.storage.local.get({ enabled: false, lookahead: 300, subFont: 24, subBg: 75, subEdge: 2, subColor: "#ffffff" }, s => { applyCfg(s); onNav(); });

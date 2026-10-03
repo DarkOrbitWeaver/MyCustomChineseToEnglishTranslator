@@ -3,6 +3,6 @@ chrome.runtime.onMessage.addListener((m, _sender, send) => {
   fetch("http://127.0.0.1:8765" + m.path, { signal: AbortSignal.timeout(15000) })
     .then(r => r.json())
     .then(send)
-    .catch(e => send({ error: String(e) }));
+    .catch(e => { console.warn("[LiveSubs] backend request failed:", String(e)); send({ error: String(e) }); });
   return true;
 });

@@ -1,7 +1,7 @@
 """LiveSubs backend: yt-dlp (audio slice) -> Qwen3-ASR + ForcedAligner -> local LLM translate -> Netflix-style cues.
 Run: python server.py   (listens on 127.0.0.1:8765)
 """
-import os, re, json, sys, time, wave, shutil, threading, tempfile, subprocess, textwrap
+import os, re, json, sys, time, wave, shutil, threading, tempfile, subprocess, textwrap, traceback
 from pathlib import Path
 import requests, uvicorn
 from fastapi import FastAPI
@@ -10,6 +10,19 @@ from fastapi.middleware.cors import CORSMiddleware
 ROOT = Path(__file__).parent
 CACHE = ROOT / "cache"; CACHE.mkdir(exist_ok=True)
 GLOSSARY_DIR = ROOT / "glossary"   # drop any *.txt in here: "中文 = English" per line
+DEVLOG = ROOT / "dev.log"           # local-only debug log (git-ignored, never pushed)
+
+def dlog(msg):
+    """timestamped line to both the console window and dev.log (rotated past 5 MB)"""
+    line = time.strftime("%H:%M:%S") + " " + msg
+    print(line, flush=True)
+    try:
+        if DEVLOG.exists() and DEVLOG.stat().st_size > 5_000_000:
+            DEVLOG.replace(ROOT / "dev.old.log")
+        with DEVLOG.open("a", "utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 BLOCK = 60          # seconds per cached block (fixed grid -> cache reuse)
 PAD = 3             # seconds of extra audio each side so edge sentences aren't cut
@@ -54,13 +67,18 @@ def grab(vid, a, b, outdir: Path):
            "--postprocessor-args", "ExtractAudio:-ar 16000 -ac 1",
            "-o", str(outdir / "a.%(ext)s"),
            f"https://www.youtube.com/watch?v={vid}"]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, text=True)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        out, _ = p.communicate(timeout=300)
     except subprocess.TimeoutExpired:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                       capture_output=True, stdin=subprocess.DEVNULL)
+        p.wait()
         raise RuntimeError("yt-dlp: audio download timed out after 5 min (slow network or YouTube throttle)")
-    if r.returncode != 0:
-        raise RuntimeError("yt-dlp: " + (r.stderr or r.stdout)[-1500:])
-    print(f"audio slice {a:.0f}-{b:.0f}s fetched in {time.time()-t0:.0f}s", flush=True)
+    if p.returncode != 0:
+        raise RuntimeError("yt-dlp: " + (out or "")[-1500:])
+    dlog(f"audio slice {a:.0f}-{b:.0f}s fetched in {time.time()-t0:.0f}s")
     wavs = list(outdir.glob("a.wav")) or list(outdir.glob("a.*"))
     if not wavs:
         raise RuntimeError("yt-dlp produced no audio")
@@ -95,6 +113,7 @@ def asr_sentences(wav: Path, offset: float):
     items = [(getattr(t, "text", ""), getattr(t, "start_time", 0.0), getattr(t, "end_time", 0.0))
              for t in (getattr(r, "time_stamps", None) or [])]
     if not items and text:   # fallback: spread evenly (worse sync, but never empty)
+        dlog("ASR gave no timestamps, spreading evenly (sync will be rough)")
         with wave.open(str(wav)) as w:
             dur = w.getnframes() / w.getframerate()
         chars = [c for c in text if c not in PUNCT]
@@ -174,10 +193,11 @@ def glossary_hits(text, cap=80):
 
 def translate(vid, lines):
     hits = glossary_hits("".join(lines))
+    dlog(f"translate {vid}: {len(lines)} lines, {len(hits)} glossary hits")
     ctx = LAST.get(vid, [])[-3:]
     out = []
     for j in range(0, len(lines), 30):
-        print(f"translate {vid} lines {min(j+30,len(lines))}/{len(lines)}", flush=True)
+        t1 = time.time()
         part = lines[j:j + 30]
         user = ""
         if hits:
@@ -194,6 +214,7 @@ def translate(vid, lines):
                 res.append(one[0] if one else l)
         out += res
         ctx = (ctx + res)[-3:]
+        dlog(f"translate {vid} batch {j//30+1}: {len(part)} lines in {time.time()-t1:.0f}s")
     LAST[vid] = (LAST.get(vid, []) + out)[-6:]
     return out
 
@@ -262,7 +283,7 @@ def process(key):
     t0 = time.time()
     def stage(name):
         state[key] = "running:" + name
-        print(f"block {vid}:{i} [{time.time()-t0:4.0f}s] {name}", flush=True)
+        dlog(f"block {vid}:{i} [{time.time()-t0:4.0f}s] {name}")
     stage("audio")
     with tempfile.TemporaryDirectory() as td:
         wav = grab(vid, a, e + PAD, Path(td))
@@ -276,11 +297,13 @@ def process(key):
         stage("shaping")
         cues = shape([(en[k], zh[k][1], zh[k][2]) for k in range(len(zh))])
     p = cpath(vid, i)
+    dlog(f"block {vid}:{i} ASR: {len(zh)} sentences -> {len(cues)} cues, total {time.time()-t0:.0f}s")
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(cues, ensure_ascii=False), "utf-8")
     tmp.replace(p)
 
 def worker():
+    fails, cooldown_until = {}, {}
     while True:
         with cv:
             while True:
@@ -288,15 +311,26 @@ def worker():
                 for k, t in list(lastreq.items()):      # drop stale queued blocks (user seeked away)
                     if state.get(k) == "queued" and now - t > 20:
                         state.pop(k, None); lastreq.pop(k, None)
-                cand = [k for k in lastreq if state.get(k) == "queued"]
+                cand = [k for k in lastreq
+                        if state.get(k) == "queued"
+                        or (state.get(k) == "running:cooldown" and now >= cooldown_until.get(k, 0))]
                 if cand:
                     key = max(cand, key=lambda k: lastreq[k]); state[key] = "running"; break
                 cv.wait(timeout=2)
         try:
-            process(key); state.pop(key, None)
+            process(key); state.pop(key, None); fails.pop(key, None)
         except Exception as ex:
-            print("block failed", key, ex)
-            state[key] = "error:" + str(ex)[:200]
+            dlog(f"block failed {key} {ex}")
+            try:
+                with DEVLOG.open("a", "utf-8") as f:
+                    f.write(traceback.format_exc() + "\n")
+            except Exception:
+                pass
+            n = fails.get(key, 0) + 1; fails[key] = n
+            wait = min(300, 10 * 2 ** (n - 1))   # 10s, 20s, 40s ... max 5 min: polite when throttled
+            state[key] = "running:cooldown"
+            cooldown_until[key] = time.time() + wait
+            dlog(f"block {key} retry in {wait}s (fail #{n})")
 
 # ---------------- API ----------------
 app = FastAPI()
@@ -336,19 +370,20 @@ def preflight():
         r = requests.get(LLM_URL.rsplit("/", 2)[0] + "/models", timeout=5)
         ids = [m.get("id", "") for m in r.json().get("data", [])]
         if LLM_MODEL not in ids:
-            print(f"WARNING: LLM_MODEL={LLM_MODEL!r} is not loaded in LM Studio (loaded: {ids}). "
-                  f"Translation will fail until you load it.", flush=True)
+            dlog(f"WARNING: LLM_MODEL={LLM_MODEL!r} is not loaded in LM Studio (loaded: {ids}). "
+                 f"Translation will fail until you load it.")
     except Exception as ex:
-        print(f"WARNING: LM Studio is not reachable at {LLM_URL} ({ex}). "
-              f"Start it and load {LLM_MODEL!r} before watching.", flush=True)
+        dlog(f"WARNING: LM Studio is not reachable at {LLM_URL} ({ex}). "
+             f"Start it and load {LLM_MODEL!r} before watching.")
     if problems:
         raise SystemExit("Missing requirements:\n- " + "\n- ".join(problems))
 
 if __name__ == "__main__":
     preflight()
     cleanup()
-    print("loading models (first run downloads them)...")
+    dlog(f"LiveSubs start: ASR={ASR_ID} LLM={LLM_MODEL} CPS={CPS}")
+    dlog("loading models (first run downloads them)...")
     ASR = load_asr()
     threading.Thread(target=worker, daemon=True).start()
-    print(f"LiveSubs ready on http://127.0.0.1:{PORT}  (LLM: {LLM_URL})")
+    dlog(f"LiveSubs ready on http://127.0.0.1:{PORT}  (LLM: {LLM_URL})")
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
