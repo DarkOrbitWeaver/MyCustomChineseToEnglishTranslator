@@ -39,6 +39,7 @@
   #ls-dl-label{font-size:11px;color:#aaa;margin-bottom:3px}
   #ls-dl-track{width:100%;height:4px;background:#333;border-radius:2px;overflow:hidden}
   #ls-dl-bar{height:100%;background:linear-gradient(90deg,#FFB300,#FF8F00);width:0%;transition:width .3s}
+  #ls-win{visibility:visible!important}
   #ls-panel .ls-sep{border:none;border-top:1px solid #333;margin:10px 0}
   #ls-panel label{display:flex;justify-content:space-between;align-items:center;margin:6px 0;gap:8px}
   #ls-panel select{width:140px;background:#222;color:#eee;border:1px solid #444;border-radius:4px;padding:3px 6px;font-size:12px}

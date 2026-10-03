@@ -26,6 +26,7 @@ def dlog(msg):
 
 BLOCK = 60          # seconds per cached block (fixed grid -> cache reuse)
 PAD = 3             # seconds of extra audio each side so edge sentences aren't cut
+BLOCK_COOLDOWN = 5  # seconds to rest between blocks (GPU breathing room)
 KEEP_DAYS = 7
 PORT = 8765
 LLM_URL = os.getenv("LLM_URL", "http://127.0.0.1:1234/v1/chat/completions")   # LM Studio default
@@ -81,6 +82,7 @@ def _download_audio(vid):
     try:
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              stdin=subprocess.DEVNULL, text=True)
+        last_logged_pct = -5
         for line in p.stdout:
             line = line.strip()
             if not line:
@@ -91,8 +93,9 @@ def _download_audio(vid):
                 pct = float(m.group(1))
                 with _dl_lock:
                     _downloads[vid]["progress"] = pct
-                if int(pct) % 10 == 0:   # log every ~10%
-                    dlog(f"[DL] {vid}: {pct:.1f}%")
+                if pct - last_logged_pct >= 5:   # log every ~5%
+                    dlog(f"[DL] {vid}: {pct:.0f}%")
+                    last_logged_pct = pct
             elif "[download]" in line.lower() or "[error]" in line.lower() or "error" in line.lower():
                 dlog(f"[DL] {vid}: {line[:200]}")
         p.wait()
@@ -440,6 +443,7 @@ def worker():
                 cv.wait(timeout=2)
         try:
             process(key); state.pop(key, None); fails.pop(key, None)
+            time.sleep(BLOCK_COOLDOWN)   # let GPU breathe between blocks
         except AudioNotReady:
             # Audio is still downloading — retry soon, don't count as failure
             state[key] = "running:cooldown"
