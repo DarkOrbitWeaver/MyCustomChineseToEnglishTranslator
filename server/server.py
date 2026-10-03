@@ -46,16 +46,21 @@ def cpath(vid, i):
 
 # ---------------- audio ----------------
 def grab(vid, a, b, outdir: Path):
-    cmd = [sys.executable, "-m", "yt_dlp", "--no-playlist", "-q", "-f", "ba/b",
+    t0 = time.time()
+    cmd = [sys.executable, "-m", "yt_dlp", "--no-playlist", "-q", "-f", "ba[abr<=64]/ba/b",
            "--js-runtimes", "node",
            "--download-sections", f"*{a:.2f}-{b:.2f}",
            "-x", "--audio-format", "wav",
            "--postprocessor-args", "ExtractAudio:-ar 16000 -ac 1",
            "-o", str(outdir / "a.%(ext)s"),
            f"https://www.youtube.com/watch?v={vid}"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("yt-dlp: audio download timed out after 5 min (slow network or YouTube throttle)")
     if r.returncode != 0:
         raise RuntimeError("yt-dlp: " + (r.stderr or r.stdout)[-1500:])
+    print(f"audio slice {a:.0f}-{b:.0f}s fetched in {time.time()-t0:.0f}s", flush=True)
     wavs = list(outdir.glob("a.wav")) or list(outdir.glob("a.*"))
     if not wavs:
         raise RuntimeError("yt-dlp produced no audio")

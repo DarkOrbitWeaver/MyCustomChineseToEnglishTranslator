@@ -162,27 +162,7 @@
       if (ch.nonce && cfg.enabled) connect();
     });
   });
-  function ensurePlayerBtn() {
-    const p = player(); if (!p) return;
-    const rc = p.querySelector(".ytp-right-controls");
-    if (!rc) return;
-    let b = rc.querySelector("#ls-player-btn");
-    if (!b) {
-      b = document.createElement("button");
-      b.id = "ls-player-btn";
-      b.className = "ytp-button";
-      b.title = "LiveSubs";
-      b.setAttribute("aria-label", "LiveSubs");
-      b.innerHTML = `<svg width="100%" height="100%" viewBox="0 0 24 24"><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="bold" font-family="Arial,sans-serif" fill="currentColor">译</text></svg>`;
-      b.onclick = () => chrome.storage.local.set({ enabled: !cfg.enabled });
-      rc.insertBefore(b, rc.firstChild);
-    }
-    b.style.color = cfg.enabled ? "#ffeb3b" : "rgba(255,255,255,.85)";
-    b.style.opacity = cfg.enabled ? "1" : ".65";
-  }
-
   function paintChrome() {
-    ensurePlayerBtn();
     const p = player(), v = video();
     const u = ui(); if (!u || !p) return;
     // badge follows YouTube's control auto-hide; errors stay visible since they need action
