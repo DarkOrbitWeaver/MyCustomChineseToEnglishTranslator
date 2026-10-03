@@ -7,7 +7,7 @@ import requests, uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parent   # absolute: independent of working directory
 CACHE = ROOT / "cache"; CACHE.mkdir(exist_ok=True)
 GLOSSARY_DIR = ROOT / "glossary"   # drop any *.txt in here: "中文 = English" per line
 DEVLOG = ROOT / "dev.log"           # local-only debug log (git-ignored, never pushed)
@@ -19,7 +19,7 @@ def dlog(msg):
     try:
         if DEVLOG.exists() and DEVLOG.stat().st_size > 5_000_000:
             DEVLOG.replace(ROOT / "dev.old.log")
-        with DEVLOG.open("a", "utf-8") as f:
+        with DEVLOG.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception:
         pass
@@ -322,7 +322,7 @@ def worker():
         except Exception as ex:
             dlog(f"block failed {key} {ex}")
             try:
-                with DEVLOG.open("a", "utf-8") as f:
+                with DEVLOG.open("a", encoding="utf-8") as f:
                     f.write(traceback.format_exc() + "\n")
             except Exception:
                 pass
@@ -338,7 +338,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.get("/health")
 def health():
-    return {"ok": True, "asr": ASR_ID, "llm": LLM_MODEL}
+    return {"ok": True, "asr": ASR_ID, "llm": LLM_MODEL, "root": str(ROOT)}
 
 @app.get("/block")
 def block(v: str, i: int):
