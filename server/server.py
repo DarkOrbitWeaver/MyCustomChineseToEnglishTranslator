@@ -321,12 +321,34 @@ def translate(vid, lines):
             user += "Previous lines (context only, do NOT translate):\n" + "\n".join(ctx) + "\n\n"
         user += "Translate these lines:\n" + json.dumps(part, ensure_ascii=False)
         res = parse_arr(llm([{"role": "system", "content": SYS}, {"role": "user", "content": user}]), len(part))
+        # Check for Chinese leaking through: re-translate any untranslated lines
+        if res:
+            for ri, txt in enumerate(res):
+                has_cjk = any('\u4e00' <= c <= '\u9fff' for c in txt)
+                has_latin = any('a' <= c.lower() <= 'z' for c in txt)
+                if has_cjk and not has_latin:
+                    one = parse_arr(llm([{"role": "system", "content": SYS},
+                                         {"role": "user", "content": "Translate these lines:\n" + json.dumps([part[ri]], ensure_ascii=False)}]), 1)
+                    if one and one[0]:
+                        res[ri] = one[0]
+                        dlog(f"translate {vid}: re-translated line {ri}: {part[ri][:30]} -> {one[0][:30]}")
         if res is None:   # model broke the format -> go line by line
+            dlog(f"translate {vid}: batch parse failed, retrying line-by-line")
             res = []
             for l in part:
-                one = parse_arr(llm([{"role": "system", "content": SYS},
-                                     {"role": "user", "content": "Translate these lines:\n" + json.dumps([l], ensure_ascii=False)}]), 1)
-                res.append(one[0] if one else l)
+                got = None
+                for attempt in range(3):
+                    one = parse_arr(llm([{"role": "system", "content": SYS},
+                                         {"role": "user", "content": "Translate these lines:\n" + json.dumps([l], ensure_ascii=False)}]), 1)
+                    if one and one[0] and not any('\u4e00' <= c <= '\u9fff' for c in one[0]):
+                        got = one[0]; break  # valid English output
+                    elif one:
+                        got = one[0]; break  # has some Chinese but at least LLM responded
+                if got:
+                    res.append(got)
+                else:
+                    dlog(f"translate {vid}: line untranslatable: {l[:40]}")
+                    res.append("[?] " + l)  # mark so user knows it failed
         out += res
         ctx = (ctx + res)[-3:]
         dlog(f"translate {vid} batch {j//30+1}: {len(part)} lines in {time.time()-t1:.0f}s")
