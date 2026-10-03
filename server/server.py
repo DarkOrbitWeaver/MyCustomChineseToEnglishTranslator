@@ -270,8 +270,44 @@ def llm(msgs):
     r.raise_for_status()
     t = r.json()["choices"][0]["message"]["content"]
     return re.sub(r"<think>.*?</think>", "", t, flags=re.S).strip()
+def parse_one(t):
+    """Robust parser for single-line translations: handles arrays, quoted strings, or plain text."""
+    if not t:
+        return None
+    t = t.strip()
+    # 1. Try standard JSON array ["..."]
+    m = re.search(r"\[.*\]", t, re.S)
+    if m:
+        try:
+            a = json.loads(m.group())
+            if isinstance(a, list) and len(a) >= 1:
+                return str(a[0]).strip()
+        except Exception:
+            pass
+    # 2. Try JSON quoted string "..."
+    if (t.startswith('"') and t.endswith('"')) or (t.startswith("'") and t.endswith("'")):
+        try:
+            s = json.loads(t)
+            if isinstance(s, str):
+                return s.strip()
+        except Exception:
+            pass
+        return t[1:-1].strip()
+    # 3. Strip markdown wrappers and quotes
+    cleaned = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", t).strip()
+    if cleaned.startswith('"') and cleaned.endswith('"'):
+        cleaned = cleaned[1:-1].strip()
+    # Valid if it contains actual Latin letters (English text)
+    if any('a' <= c.lower() <= 'z' for c in cleaned):
+        return cleaned
+    return None
 
 def parse_arr(t, n):
+    if not t:
+        return None
+    if n == 1:
+        s = parse_one(t)
+        return [s] if s else None
     m = re.search(r"\[.*\]", t, re.S)
     if m:
         try:
