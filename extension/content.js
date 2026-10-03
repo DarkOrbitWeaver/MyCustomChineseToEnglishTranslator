@@ -202,10 +202,12 @@
   }
 
   // ---- Backend connection ----
+  let lastConnectTry = 0;
   async function connect() {
+    lastConnectTry = Date.now();
     const r = await api('/health');
     online = !r.error && r.ok === true;
-    if (online) { blocks.clear(); nextTry = 0; elog('backend connected'); }
+    if (online) { nextTry = 0; elog('backend connected'); }
     else elog('backend unreachable');
   }
 
@@ -341,6 +343,9 @@
   function paintChrome() {
     updateStatus();
     paintMarkers();
+    if (cfg.enabled && !online && Date.now() - lastConnectTry > 3000) {
+      connect();
+    }
   }
 
   // ---- Navigation & settings ----
