@@ -6,14 +6,15 @@ own PC. No paid APIs, everything runs locally.
 
 ## How it works (the 3 pieces)
 
-1. **Backend (`server/`)** — downloads 60-second audio slices of the video,
-   transcribes the Chinese (Qwen3-ASR), translates it to English with a local
-   LLM, and serves Netflix-style subtitle cues on `http://127.0.0.1:8765`.
+1. **Backend (`server/`)** — downloads the full audio track once per video
+   (background, ~1 min), then slices it locally per 60-second block. Each
+   block is transcribed (Qwen3-ASR), translated to English with a local LLM,
+   and served as Netflix-style subtitle cues on `http://127.0.0.1:8765`.
 2. **Translator brain (LM Studio)** — any small non-thinking instruct model.
    It only translates text, it never touches audio.
-3. **Chrome extension (`extension/`)** — shows the English subs inside the
-   YouTube player, in YouTube's own caption layer. Yellow marks on the video
-   bar show which minutes are already translated.
+3. **Chrome extension (`extension/`)** — in-player dark panel with subtitle
+   controls, download progress bar, and style presets. Yellow marks on the
+   seek bar show which minutes are already translated.
 
 ## What you need (hardware / software)
 
@@ -52,40 +53,44 @@ model than the default, set it first:
 
 **4. Load the extension.**
 `chrome://extensions` → Developer mode → Load unpacked → pick the
-`extension` folder. Pin the **L** icon. Open a Chinese video, click **L**,
-tick **Enable**.
+`extension` folder. Pin the LiveSubs icon (amber 字→A bubble). Open a
+Chinese video, click the LiveSubs button in the player bar or the toolbar
+icon, and tick **Enable**.
 
 ## Daily use
 
 1. LM Studio → load model → Start Server.
 2. Double-click `start.bat`, wait for `LiveSubs ready`.
-3. YouTube → **L** → Enable. Subs appear after 1–3 min for the first minute;
-   later minutes preload ahead (yellow marks on the video bar).
-4. Style the subs in the **L** panel: size, background darkness, text edge.
-5. If the backend was off, the video corner says
-   `LiveSubs: offline — click to retry`. Click it.
+3. YouTube → click the LiveSubs button in the player bar → Enable.
+4. The audio downloads in the background (progress bar in the panel, ~1–2 min
+   for a 2-hour video). Once done, blocks start processing (~30s each).
+5. Yellow marks on the seek bar show translated minutes. Subs appear
+   automatically as you watch.
+6. Style the subs in the panel: size, color, background, text edge, presets.
 
 ## Tuning
 
 - **Word list**: `server/glossary/*.txt`, one `中文 = English` per line
-  (~960 cultivation terms included). Only terms that appear in a minute of
+  (~960 cultivation terms included). Only terms that appear in a block of
   audio get sent to the translator. Edit the files any time — they reload
   automatically, no restart needed.
 - **Reading speed**: default is Netflix timing. If you watch at 2x, run
   `set CPS=10` before `start.bat` so lines stay up longer, and delete that
   video's folder in `server/cache/` so old timings rebuild.
-- **Subtitle cache**: `server/cache/<videoId>/<block>.json`, one file per
-  60 seconds. Older than 7 days gets cleaned on launch.
+- **Subtitle cache**: `server/cache/<videoId>/` — `full.webm` (downloaded
+  audio) + `<block>.json` (translated cues). Kept for 30 days, cleaned on
+  launch. Re-opening a video you watched last week = instant subs.
 
 ## If something breaks
 
 - `offline — click to retry`: backend or LM Studio isn't running. Start both.
-- First minute takes minutes: normal (audio download + first translation).
+- First block takes ~30s after audio download: normal (ASR + translation).
 - `yt-dlp` / `ffmpeg` errors: update yt-dlp (`pip install -U yt-dlp`) and make
   sure ffmpeg + Node.js are installed.
 - Out of VRAM / CUDA errors: smaller translator (3–4B), and
   `ASR_MODEL=Qwen/Qwen3-ASR-0.6B`.
 - Weird English for a name/term: add it to the right `server/glossary/` file.
+- LM Studio context too high: set to **4096** (not higher — wastes VRAM).
 
 ## Project layout
 
@@ -94,8 +99,9 @@ setup.bat / start.bat   one-time setup + daily launcher (Windows)
 server/server.py        backend: audio → transcribe → translate → cues (:8765)
 server/requirements.txt python deps (torch with CUDA first, see setup.bat)
 server/glossary/        Chinese → English term lists (*.txt)
-server/cache/           per-video translated blocks (auto-created, not in git)
-extension/              Chrome extension (player overlay + L popup panel)
+server/cache/           per-video audio + translated blocks (auto-created)
+extension/              Chrome extension (in-player panel + popup)
+extension/icons/        Extension icon set (SVG source + PNGs)
 ```
 
 Made for late-night cultivation binges. 欢迎来到修仙世界.

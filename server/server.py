@@ -27,7 +27,7 @@ def dlog(msg):
 BLOCK = 60          # seconds per cached block (fixed grid -> cache reuse)
 PAD = 3             # seconds of extra audio each side so edge sentences aren't cut
 BLOCK_COOLDOWN = 5  # seconds to rest between blocks (GPU breathing room)
-KEEP_DAYS = 7
+KEEP_DAYS = 30
 PORT = 8765
 LLM_URL = os.getenv("LLM_URL", "http://127.0.0.1:1234/v1/chat/completions")   # LM Studio default
 LLM_MODEL = os.getenv("LLM_MODEL", "local-model")
