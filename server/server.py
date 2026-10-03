@@ -1,7 +1,7 @@
 """LiveSubs backend: yt-dlp (audio slice) -> Qwen3-ASR + ForcedAligner -> local LLM translate -> Netflix-style cues.
 Run: python server.py   (listens on 127.0.0.1:8765)
 """
-import os, re, json, sys, time, wave, threading, tempfile, subprocess, textwrap
+import os, re, json, sys, time, wave, shutil, threading, tempfile, subprocess, textwrap
 from pathlib import Path
 import requests, uvicorn
 from fastapi import FastAPI
@@ -320,7 +320,27 @@ def block(v: str, i: int):
         cv.notify()
         return {"state": state[key]}
 
+def preflight():
+    """Fail fast with a human-readable message when a required tool is missing."""
+    problems = []
+    if not shutil.which("ffmpeg"):
+        problems.append("ffmpeg not found on PATH (winget install Gyan.FFmpeg, then reopen the terminal)")
+    if not any(shutil.which(r) for r in ("node", "deno", "bun")):
+        problems.append("no JS runtime found (install Node.js LTS so yt-dlp can read YouTube pages)")
+    try:
+        r = requests.get(LLM_URL.rsplit("/", 2)[0] + "/models", timeout=5)
+        ids = [m.get("id", "") for m in r.json().get("data", [])]
+        if LLM_MODEL not in ids:
+            print(f"WARNING: LLM_MODEL={LLM_MODEL!r} is not loaded in LM Studio (loaded: {ids}). "
+                  f"Translation will fail until you load it.", flush=True)
+    except Exception as ex:
+        print(f"WARNING: LM Studio is not reachable at {LLM_URL} ({ex}). "
+              f"Start it and load {LLM_MODEL!r} before watching.", flush=True)
+    if problems:
+        raise SystemExit("Missing requirements:\n- " + "\n- ".join(problems))
+
 if __name__ == "__main__":
+    preflight()
     cleanup()
     print("loading models (first run downloads them)...")
     ASR = load_asr()

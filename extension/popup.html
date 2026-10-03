@@ -5,6 +5,9 @@
   label, select, button { display: block; width: 100%; margin: 6px 0; }
   label.row { display: flex; align-items: center; gap: 8px; }
   label.row input { width: auto; margin: 0; }
+  input[type=range] { width: 100%; margin: 2px 0 0; }
+  hr { border: none; border-top: 1px solid #ccc; margin: 10px 0; }
+  .sub { font-weight: bold; margin-top: 4px; }
 </style>
 <label class="row"><input type="checkbox" id="on"> Enable LiveSubs</label>
 <label>Prepare ahead
@@ -17,4 +20,9 @@
   </select>
 </label>
 <button id="retry">Retry connection</button>
+<hr>
+<div class="sub">Subtitles</div>
+<label>Size <input type="range" id="size" min="14" max="48" step="1"></label>
+<label>Background darkness <input type="range" id="bg" min="0" max="90" step="5"></label>
+<label>Text edge <input type="range" id="edge" min="0" max="3" step="1"></label>
 <script src="popup.js"></script>

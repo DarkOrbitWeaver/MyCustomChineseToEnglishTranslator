@@ -1,0 +1,9 @@
+# Python cache, logs, downloaded models, per-video subtitle cache.
+# Nothing in here belongs in git — every PC rebuilds it on first run.
+__pycache__/
+*.pyc
+*.pyo
+*.log
+server/cache/
+server/.venv/
+.venv/
