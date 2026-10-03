@@ -1,6 +1,6 @@
 (() => {
   const BLOCK = 60;                       // must match server.py
-  const cfg = { enabled: false, lookahead: 300, subFont: 24, subBg: 75, subEdge: 2 };
+  const cfg = { enabled: false, lookahead: 300, subFont: 24, subBg: 75, subEdge: 2, subColor: "#ffffff" };
   let vid = null, blocks = new Map(), busy = false, nextTry = 0, online = false;
 
   const $ = s => document.querySelector(s);
@@ -66,7 +66,7 @@
 
   function styleSubs(t) {
     t.style.fontSize = cfg.subFont + "px";
-    t.style.color = "#fff";
+    t.style.color = cfg.subColor || "#fff";
     t.style.background = "rgba(0,0,0," + (cfg.subBg / 100).toFixed(2) + ")";
     t.style.padding = "2px 10px";
     t.style.borderRadius = "4px";
@@ -92,7 +92,7 @@
     if (host) {
       let win = host.querySelector("#ls-win");
       if (!cfg.enabled || !text) { if (win) win.style.display = "none"; return; }
-      const ss = cfg.subFont + "/" + cfg.subBg + "/" + cfg.subEdge;
+      const ss = cfg.subFont + "/" + cfg.subBg + "/" + cfg.subEdge + "/" + cfg.subColor;
       host.style.display = "block";   // YT hides the layer when its own CC track is off; ours doesn't need one
       if (!win) {
         win = document.createElement("div");
@@ -126,7 +126,7 @@
     }
     // Fallback: our own overlay (e.g. embeds), styled from the panel like the main path.
     const u = ui(); if (!u) return;
-    const ss2 = cfg.subFont + "/" + cfg.subBg + "/" + cfg.subEdge;
+    const ss2 = cfg.subFont + "/" + cfg.subBg + "/" + cfg.subEdge + "/" + cfg.subColor;
     if (u.cap.dataset.ss !== ss2) { u.cap.dataset.ss = ss2; u.cap.dataset.t = ""; }
     if (u.cap.dataset.t === text) return;
     u.cap.dataset.t = text; u.cap.replaceChildren();
@@ -150,19 +150,39 @@
   function applyCfg(s) {
     const was = cfg.enabled;
     cfg.enabled = s.enabled; cfg.lookahead = s.lookahead;
-    cfg.subFont = s.subFont; cfg.subBg = s.subBg; cfg.subEdge = s.subEdge;
+    cfg.subFont = s.subFont; cfg.subBg = s.subBg; cfg.subEdge = s.subEdge; cfg.subColor = s.subColor;
     if (cfg.enabled && !was) connect();
     if (!cfg.enabled) { online = false; setStatus("off"); }
   }
 
-  chrome.storage.local.get({ enabled: false, lookahead: 300, subFont: 24, subBg: 75, subEdge: 2 }, s => { applyCfg(s); onNav(); });
+  chrome.storage.local.get({ enabled: false, lookahead: 300, subFont: 24, subBg: 75, subEdge: 2, subColor: "#ffffff" }, s => { applyCfg(s); onNav(); });
   chrome.storage.onChanged.addListener((ch) => {
-    chrome.storage.local.get({ enabled: false, lookahead: 300, subFont: 24, subBg: 75, subEdge: 2 }, s => {
+    chrome.storage.local.get({ enabled: false, lookahead: 300, subFont: 24, subBg: 75, subEdge: 2, subColor: "#ffffff" }, s => {
       applyCfg(s);
       if (ch.nonce && cfg.enabled) connect();
     });
   });
+  function ensurePlayerBtn() {
+    const p = player(); if (!p) return;
+    const rc = p.querySelector(".ytp-right-controls");
+    if (!rc) return;
+    let b = rc.querySelector("#ls-player-btn");
+    if (!b) {
+      b = document.createElement("button");
+      b.id = "ls-player-btn";
+      b.className = "ytp-button";
+      b.title = "LiveSubs";
+      b.setAttribute("aria-label", "LiveSubs");
+      b.innerHTML = `<svg width="100%" height="100%" viewBox="0 0 24 24"><text x="12" y="17" text-anchor="middle" font-size="13" font-weight="bold" font-family="Arial,sans-serif" fill="currentColor">译</text></svg>`;
+      b.onclick = () => chrome.storage.local.set({ enabled: !cfg.enabled });
+      rc.insertBefore(b, rc.firstChild);
+    }
+    b.style.color = cfg.enabled ? "#ffeb3b" : "rgba(255,255,255,.85)";
+    b.style.opacity = cfg.enabled ? "1" : ".65";
+  }
+
   function paintChrome() {
+    ensurePlayerBtn();
     const p = player(), v = video();
     const u = ui(); if (!u || !p) return;
     // badge follows YouTube's control auto-hide; errors stay visible since they need action
