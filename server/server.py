@@ -27,7 +27,8 @@ def dlog(msg):
 
 BLOCK = 60          # seconds per cached block (fixed grid -> cache reuse)
 PAD = 5             # seconds of extra audio each side so edge sentences aren't cut
-BLOCK_COOLDOWN = 5  # seconds to rest between blocks (GPU breathing room)
+BLOCK_COOLDOWN = 5.0  # seconds to rest between blocks (GPU breathing room)
+BATCH_SIZE = 12       # lines per translation batch
 KEEP_DAYS = 30
 PORT = 8765
 LLM_URL = os.getenv("LLM_URL", "http://127.0.0.1:1234/v1/chat/completions")   # LM Studio default
@@ -348,10 +349,10 @@ def translate(vid, lines):
     dlog(f"translate {vid}: {len(lines)} lines, {len(hits)} glossary hits")
     ctx = LAST.get(vid, [])[-3:]
     out = []
-    BATCH_SIZE = 12
-    for j in range(0, len(lines), BATCH_SIZE):
+    bs = BATCH_SIZE
+    for j in range(0, len(lines), bs):
         t1 = time.time()
-        part = lines[j:j + BATCH_SIZE]
+        part = lines[j:j + bs]
         user = ""
         if hits:
             user += "Glossary:\n" + "\n".join(f"{k} = {v}" for k, v in hits.items()) + "\n\n"
@@ -540,7 +541,18 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.get("/health")
 def health():
-    return {"ok": True, "asr": ASR_ID, "llm": LLM_MODEL, "root": str(ROOT)}
+    return {"ok": True, "asr": ASR_ID, "llm": LLM_MODEL, "root": str(ROOT), "cooldown": BLOCK_COOLDOWN, "batch_size": BATCH_SIZE}
+
+@app.api_route("/config", methods=["GET", "POST"])
+def config(cooldown: float = None, batch_size: int = None):
+    global BLOCK_COOLDOWN, BATCH_SIZE
+    if cooldown is not None and 0.0 <= cooldown <= 30.0:
+        BLOCK_COOLDOWN = float(cooldown)
+        dlog(f"config updated: BLOCK_COOLDOWN = {BLOCK_COOLDOWN}s")
+    if batch_size is not None and 4 <= batch_size <= 30:
+        BATCH_SIZE = int(batch_size)
+        dlog(f"config updated: BATCH_SIZE = {BATCH_SIZE} lines")
+    return {"ok": True, "cooldown": BLOCK_COOLDOWN, "batch_size": BATCH_SIZE}
 
 @app.get("/block")
 def block(v: str, i: int):

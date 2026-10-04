@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const BLOCK = 60;                       // must match server.py
-  const cfg = { enabled: false, lookahead: 180, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' };
+  const cfg = { enabled: false, lookahead: 180, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' };
   let vid = null, blocks = new Map(), online = false, busy = false, nextTry = 0, dlPct = -1;
   let lastHb = 0;
 
@@ -188,6 +188,16 @@
             <option value="180">3 min (recommended)</option>
             <option value="300">5 min</option>
           </select></label>
+          <label>GPU cooldown <select id="ls-cooldown">
+            <option value="0">0s (max speed)</option>
+            <option value="5">5s (balanced, default)</option>
+            <option value="10">10s (cool GPU)</option>
+          </select></label>
+          <label>Batch size <select id="ls-batch">
+            <option value="8">8 lines (accurate)</option>
+            <option value="12">12 lines (default)</option>
+            <option value="16">16 lines</option>
+          </select></label>
         </div>
       `;
 
@@ -204,6 +214,8 @@
       const edgeSl = $('ls-edge');
       const colorSel = $('ls-color');
       const lookaheadSel = $('ls-lookahead');
+      const cooldownSel = $('ls-cooldown');
+      const batchSel = $('ls-batch');
       const btnConnect = $('ls-btn-connect');
       const advToggle = $('ls-adv-toggle');
       const advBody = $('ls-adv-body');
@@ -217,6 +229,8 @@
       edgeSl.value = cfg.subEdge;
       colorSel.value = cfg.subColor;
       if (lookaheadSel) lookaheadSel.value = String(cfg.lookahead || 180);
+      if (cooldownSel) cooldownSel.value = String(cfg.cooldown !== undefined ? cfg.cooldown : 5);
+      if (batchSel) batchSel.value = String(cfg.batchSize || 12);
 
       updatePreview();
 
@@ -259,6 +273,22 @@
         lookaheadSel.onchange = () => {
           cfg.lookahead = Number(lookaheadSel.value);
           chrome.storage.local.set({ lookahead: cfg.lookahead });
+        };
+      }
+
+      if (cooldownSel) {
+        cooldownSel.onchange = () => {
+          cfg.cooldown = Number(cooldownSel.value);
+          chrome.storage.local.set({ cooldown: cfg.cooldown });
+          api('/config?cooldown=' + cfg.cooldown);
+        };
+      }
+
+      if (batchSel) {
+        batchSel.onchange = () => {
+          cfg.batchSize = Number(batchSel.value);
+          chrome.storage.local.set({ batchSize: cfg.batchSize });
+          api('/config?batch_size=' + cfg.batchSize);
         };
       }
 
@@ -347,6 +377,9 @@
     if (online) {
       nextTry = 0;
       elog('backend connected');
+      if (cfg.cooldown !== undefined || cfg.batchSize !== undefined) {
+        api(`/config?cooldown=${cfg.cooldown !== undefined ? cfg.cooldown : 5}&batch_size=${cfg.batchSize || 12}`);
+      }
     } else {
       elog('backend unreachable');
     }
@@ -546,6 +579,8 @@
     const was = cfg.enabled;
     cfg.enabled = s.enabled;
     cfg.lookahead = s.lookahead || 180;
+    cfg.cooldown = s.cooldown !== undefined ? s.cooldown : 5;
+    cfg.batchSize = s.batchSize || 12;
     cfg.subFont = s.subFont; cfg.subBg = s.subBg; cfg.subEdge = s.subEdge; cfg.subColor = s.subColor;
     if (el.panel) {
       const enCb = el.panel.querySelector('#ls-en');
@@ -557,13 +592,13 @@
   }
 
   // ---- Init ----
-  chrome.storage.local.get({ enabled: false, lookahead: 180, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' }, s => {
+  chrome.storage.local.get({ enabled: false, lookahead: 180, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' }, s => {
     elog('init: enabled=' + s.enabled);
     applyCfg(s);
     onNav();
   });
   chrome.storage.onChanged.addListener(() => {
-    chrome.storage.local.get({ enabled: false, lookahead: 180, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' }, s => applyCfg(s));
+    chrome.storage.local.get({ enabled: false, lookahead: 180, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' }, s => applyCfg(s));
   });
 
   document.addEventListener('yt-navigate-finish', onNav);
