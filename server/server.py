@@ -404,16 +404,22 @@ def wrap(t):
     b = min(sp, key=lambda p: abs(p - mid))
     return t[:b] + "\n" + t[b + 1:]
 
-def split_text(t, limit=MAXC * 2):
+def split_text(t, limit=55):
+    t = " ".join(t.split())
     if len(t) <= limit:
         return [t]
     out, cur = [], ""
-    for p in re.split(r"(?<=[,;:.!?])\s+", t):
+    for p in re.split(r"(?<=[,;:.!?—–])\s+", t):
         while len(p) > limit:
-            cut = p.rfind(" ", 0, limit); cut = cut if cut > 0 else limit
+            cut = p.rfind(" ", 0, limit)
+            cut = cut if cut > 0 else limit
             if cur:
-                out.append(cur); cur = ""
-            out.append(p[:cut].strip()); p = p[cut:].strip()
+                out.append(cur)
+                cur = ""
+            out.append(p[:cut].strip())
+            p = p[cut:].strip()
+        if not p:
+            continue
         if len(cur) + len(p) + 1 <= limit:
             cur = (cur + " " + p).strip()
         else:
