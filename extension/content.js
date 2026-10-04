@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const BLOCK = 60;                       // must match server.py
-  const cfg = { enabled: false, lookahead: 180, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' };
+  const cfg = { enabled: false, lookahead: 300, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' };
   let vid = null, blocks = new Map(), queuedBlocks = new Set(), online = false, busy = false, nextTry = 0, dlPct = -1;
   let lastHb = 0;
 
@@ -200,10 +200,11 @@
             <button id="ls-btn-export" class="ls-act-btn" title="Download all subtitles as .SRT">🎬 Export .SRT</button>
           </div>
           <label>Ahead buffer <select id="ls-lookahead">
-            <option value="60">1 min</option>
-            <option value="120">2 min</option>
-            <option value="180">3 min (recommended)</option>
-            <option value="300">5 min</option>
+            <option value="180">3 min (minimum)</option>
+            <option value="300">5 min (default)</option>
+            <option value="480">8 min</option>
+            <option value="600">10 min</option>
+            <option value="900">15 min (maximum)</option>
           </select></label>
           <label>GPU cooldown <select id="ls-cooldown">
             <option value="0">0s (max speed)</option>
@@ -245,7 +246,7 @@
       bgSl.value = cfg.subBg;
       edgeSl.value = cfg.subEdge;
       colorSel.value = cfg.subColor;
-      if (lookaheadSel) lookaheadSel.value = String(cfg.lookahead || 180);
+      if (lookaheadSel) lookaheadSel.value = String(cfg.lookahead || 300);
       if (cooldownSel) cooldownSel.value = String(cfg.cooldown !== undefined ? cfg.cooldown : 5);
       if (batchSel) batchSel.value = String(cfg.batchSize || 12);
 
@@ -610,7 +611,7 @@
   function applyCfg(s) {
     const was = cfg.enabled;
     cfg.enabled = s.enabled;
-    cfg.lookahead = s.lookahead || 180;
+    cfg.lookahead = s.lookahead || 300;
     cfg.cooldown = s.cooldown !== undefined ? s.cooldown : 5;
     cfg.batchSize = s.batchSize || 12;
     cfg.subFont = s.subFont; cfg.subBg = s.subBg; cfg.subEdge = s.subEdge; cfg.subColor = s.subColor;
@@ -624,13 +625,13 @@
   }
 
   // ---- Init ----
-  chrome.storage.local.get({ enabled: false, lookahead: 180, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' }, s => {
+  chrome.storage.local.get({ enabled: false, lookahead: 300, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' }, s => {
     elog('init: enabled=' + s.enabled);
     applyCfg(s);
     onNav();
   });
   chrome.storage.onChanged.addListener(() => {
-    chrome.storage.local.get({ enabled: false, lookahead: 180, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' }, s => applyCfg(s));
+    chrome.storage.local.get({ enabled: false, lookahead: 300, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' }, s => applyCfg(s));
   });
 
   document.addEventListener('yt-navigate-finish', onNav);
