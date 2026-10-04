@@ -3,7 +3,7 @@
   const BLOCK = 60;                       // must match server.py
   const cfg = { enabled: false, lookahead: 300, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' };
   let vid = null, blocks = new Map(), queuedBlocks = new Set(), online = false, busy = false, nextTry = 0, dlPct = -1;
-  let lastHb = 0;
+  let lastHb = 0, lastHbCur = -1;
 
   const elog = m => console.log('[LiveSubs]', m);
   const api = path => new Promise(res => chrome.runtime.sendMessage({ path }, r => res(r || { error: 'no response' })));
@@ -476,13 +476,15 @@
 
     const t = v.currentTime, cur = Math.floor(t / BLOCK);
 
-    // Send active heartbeat with current playhead to server every 8s while video is playing
-    if (!v.paused && Date.now() - lastHb > 8000) {
+    // Send active heartbeat with current playhead every 8s, or immediately on seek
+    const seeked = Math.abs(cur - lastHbCur) >= 2;
+    if ((!v.paused && Date.now() - lastHb > 8000) || seeked) {
       lastHb = Date.now();
+      lastHbCur = cur;
       api('/heartbeat?v=' + vid + '&cur=' + cur);
     }
 
-    const last = Math.min(Math.floor(v.duration / BLOCK), Math.floor((t + (cfg.lookahead || 180)) / BLOCK));
+    const last = Math.min(Math.floor(v.duration / BLOCK), Math.floor((t + (cfg.lookahead || 300)) / BLOCK));
 
     // Find all missing blocks in the lookahead buffer window
     const missing = [];

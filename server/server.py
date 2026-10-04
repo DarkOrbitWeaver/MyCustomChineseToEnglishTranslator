@@ -543,18 +543,24 @@ def worker():
                 for k, t in list(lastreq.items()):
                     hb = _last_heartbeat.get(k[0], (t, 0))
                     hb_time = hb[0] if isinstance(hb, (tuple, list)) else hb
-                    if state.get(k) == "queued" and (now - t > 60 or now - hb_time > 25):
+                    cur_playhead = hb[1] if isinstance(hb, (tuple, list)) else 0
+                    is_past = cur_playhead > 0 and (k[1] < cur_playhead - 1)
+                    if state.get(k) == "queued" and (now - t > 60 or now - hb_time > 25 or is_past):
                         state.pop(k, None); lastreq.pop(k, None)
                 cand = [k for k in lastreq
                         if state.get(k) == "queued"
                         or (state.get(k) == "running:cooldown" and now >= cooldown_until.get(k, 0))]
                 if cand:
-                    # Sequential priority: lowest block index first (so playback flows)
-                    # Among different videos, prefer the one with the most recent request
                     newest_vid = max(lastreq, key=lambda k: lastreq[k])[0]
                     vid_cand = [k for k in cand if k[0] == newest_vid]
                     pick = vid_cand if vid_cand else cand
-                    key = min(pick, key=lambda k: k[1])   # lowest block number
+                    hb = _last_heartbeat.get(newest_vid)
+                    cur_playhead = hb[1] if (hb and isinstance(hb, (tuple, list))) else 0
+                    ahead = [k for k in pick if k[1] >= cur_playhead]
+                    if ahead:
+                        key = min(ahead, key=lambda k: k[1])
+                    else:
+                        key = min(pick, key=lambda k: abs(k[1] - cur_playhead))
                     state[key] = "running"; break
                 cv.wait(timeout=2)
         try:
