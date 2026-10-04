@@ -20,7 +20,7 @@
 
   // ---- CSS ----
   const CSS = `
-  #ls-panel{position:absolute;right:12px;bottom:64px;width:300px;max-height:82%;overflow-y:auto;z-index:80;
+  #ls-panel{position:absolute;right:12px;bottom:64px;width:300px;max-height:82%;overflow-y:auto;overflow-x:hidden;z-index:80;
     background:rgba(18,18,18,.95);color:#eee;font:13px Roboto,Arial,sans-serif;border-radius:12px;
     padding:14px;display:none;box-shadow:0 8px 32px rgba(0,0,0,0.6);backdrop-filter:blur(10px);
     border:1px solid rgba(255,255,255,0.08);transition:opacity .15s ease}
@@ -49,8 +49,12 @@
   #ls-dl-bar{height:100%;background:linear-gradient(90deg,#FFB300,#FF8F00);width:0%;transition:width .3s}
   #ls-top-dl{position:absolute;top:0;left:0;right:0;height:3px;background:rgba(0,0,0,0.3);z-index:70;pointer-events:none;display:none;transition:opacity .4s ease}
   #ls-top-dl-bar{height:100%;width:0%;background:linear-gradient(90deg,#FFB300,#FF8F00);box-shadow:0 0 8px #FFB300;transition:width .25s ease}
-  #ls-preview-box{margin:8px 0;padding:8px 10px;background:#111;border:1px dashed #444;border-radius:6px;text-align:center;min-height:36px;display:flex;align-items:center;justify-content:center}
-  #ls-preview-sample{display:inline-block;padding:3px 8px;border-radius:4px;font-family:'YouTube Noto',Roboto,Arial,sans-serif;white-space:nowrap;line-height:1.4}
+  #ls-preview-box{margin:8px 0;padding:6px 10px;background:#111;border:1px dashed #444;border-radius:6px;
+    text-align:center;min-height:32px;display:flex;align-items:center;justify-content:center;
+    overflow:hidden;max-width:100%;box-sizing:border-box}
+  #ls-preview-sample{display:inline-block;padding:2px 8px;border-radius:4px;
+    font-family:'YouTube Noto',Roboto,Arial,sans-serif;white-space:nowrap;line-height:1.3;
+    font-size:15px;max-width:100%;overflow:hidden;text-overflow:ellipsis}
   #ls-panel .ls-sep{border:none;border-top:1px solid #333;margin:10px 0}
   #ls-panel label{display:flex;justify-content:space-between;align-items:center;margin:6px 0;gap:8px;font-size:12px}
   .ls-slider-row{display:flex;align-items:center;gap:8px}
@@ -60,8 +64,8 @@
   #ls-panel input[type=color]{width:36px;height:22px;padding:0;border:1px solid #444;border-radius:4px;background:#222;cursor:pointer}
   #ls-btn svg{padding:8px;box-sizing:border-box}
   #ls-win{visibility:visible!important;text-align:center;width:100%}
-  #ls-sub{display:inline-block;padding:3px 10px;border-radius:4px;font-family:'YouTube Noto',Roboto,Arial,sans-serif;
-    white-space:pre-wrap;line-height:1.4;max-width:85%;box-sizing:border-box;overflow-wrap:break-word;word-break:break-word}
+  #ls-sub{display:inline-block;padding:3px 12px;border-radius:4px;font-family:'YouTube Noto',Roboto,Arial,sans-serif;
+    white-space:nowrap;line-height:1.4;max-width:92%;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis}
   .ls-adv-hdr{display:flex;justify-content:space-between;align-items:center;cursor:pointer;color:#aaa;font-size:12px;user-select:none;padding:6px 0}
   .ls-adv-hdr:hover{color:#fff}
   #ls-adv-body{padding-top:6px;display:none}
@@ -102,7 +106,20 @@
   function updatePreview() {
     if (!el.panel) return;
     const sample = el.panel.querySelector('#ls-preview-sample');
-    if (sample) styleSub(sample);
+    if (sample) {
+      sample.style.color = cfg.subColor || '#fff';
+      sample.style.background = 'rgba(0,0,0,' + (cfg.subBg / 100).toFixed(2) + ')';
+      const e = Number(cfg.subEdge) || 0;
+      if (e > 0) {
+        sample.style.webkitTextStroke = `${e}px #000`;
+        sample.style.paintOrder = 'stroke fill';
+        sample.style.textShadow = '0 2px 4px rgba(0,0,0,0.85)';
+      } else {
+        sample.style.webkitTextStroke = '0px transparent';
+        sample.style.paintOrder = 'normal';
+        sample.style.textShadow = 'none';
+      }
+    }
     const vSize = el.panel.querySelector('#ls-val-size');
     const vBg = el.panel.querySelector('#ls-val-bg');
     const vEdge = el.panel.querySelector('#ls-val-edge');
@@ -153,7 +170,7 @@
         </div>
 
         <div id="ls-preview-box">
-          <span id="ls-preview-sample">LiveSubs Preview 示例</span>
+          <span id="ls-preview-sample">LiveSubs Preview</span>
         </div>
 
         <label>Preset <select id="ls-preset">
@@ -509,14 +526,10 @@
       span.parentElement.style.display = 'none';
       return;
     }
-    // Show subtitle: prefer single long line, wrap naturally within container
+    // Show subtitle: strictly single clean line
     span.replaceChildren();
-    const isMultiSpeaker = text.includes('\n') && text.split('\n').some(l => /^\s*[-—–]/.test(l));
-    const displayText = isMultiSpeaker ? text : text.replace(/\s*\n\s*/g, ' ');
-    displayText.split('\n').forEach((line, i) => {
-      if (i) span.appendChild(document.createElement('br'));
-      span.appendChild(document.createTextNode(line));
-    });
+    const singleLineText = text.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+    span.appendChild(document.createTextNode(singleLineText));
     styleSub(span);
     span.parentElement.style.display = 'block';
   }

@@ -394,43 +394,84 @@ def translate(vid, lines):
     LAST[vid] = (LAST.get(vid, []) + out)[-6:]
     return out
 
-# ---------------- cue shaping ----------------
-def wrap(t):
-    t = " ".join(t.split())
-    if len(t) <= MAXC:
-        return t
-    mid = len(t) // 2
-    sp = [m.start() for m in re.finditer(" ", t)]
-    if not sp:
-        return t
-    b = min(sp, key=lambda p: abs(p - mid))
-    return t[:b] + "\n" + t[b + 1:]
-
-def split_text(t, limit=55):
-    t = " ".join(t.split())
+# ---------------- cue shaping & single-line splitting ----------------
+def split_text(t, limit=45):
+    """Split long compound text into natural, punchy 1-line subtitle clauses (20-45 chars)."""
+    t = " ".join(t.replace("\n", " ").split())
     if len(t) <= limit:
         return [t]
-    out, cur = [], ""
-    for p in re.split(r"(?<=[,;:.!?—–])\s+", t):
+
+    # 1. Split on clause punctuation: comma, semicolon, dash, colon, period, question mark
+    parts = re.split(r"(?<=[,;:.!?—–-])\s+", t)
+
+    # 2. Refine parts longer than limit using conjunctions & connectors
+    refined = []
+    conjunction_pat = re.compile(
+        r"\s+(?=(?:and|but|or|because|while|when|where|so|that|then|yet|which|for)\b)",
+        re.IGNORECASE
+    )
+    for p in parts:
+        if len(p) <= limit:
+            refined.append(p)
+        else:
+            sub = conjunction_pat.split(p)
+            for s in sub:
+                if s.strip():
+                    refined.append(s.strip())
+
+    # 3. Soft word boundary wrap for parts still exceeding limit
+    final_parts = []
+    for p in refined:
         while len(p) > limit:
             cut = p.rfind(" ", 0, limit)
-            cut = cut if cut > 0 else limit
-            if cur:
-                out.append(cur)
-                cur = ""
-            out.append(p[:cut].strip())
+            if cut == -1 or cut < 12:
+                cut = p.find(" ", limit)
+            if cut == -1:
+                final_parts.append(p)
+                p = ""
+                break
+            final_parts.append(p[:cut].strip())
             p = p[cut:].strip()
-        if not p:
+        if p:
+            final_parts.append(p)
+
+    # 4. Merge tiny orphan fragments (< 16 chars) into neighbor if combined fits nicely
+    merged = []
+    for chunk in final_parts:
+        if not chunk:
             continue
-        if len(cur) + len(p) + 1 <= limit:
-            cur = (cur + " " + p).strip()
+        if merged and (len(merged[-1]) + len(chunk) + 1 <= limit):
+            if len(chunk) < 16 or len(merged[-1]) < 16 or len(merged[-1]) + len(chunk) + 1 <= 38:
+                merged[-1] = merged[-1] + " " + chunk
+                continue
+        merged.append(chunk)
+    return merged or [t]
+
+def sanitize_cues(cues):
+    """Ensure cues (including legacy cached ones) are strictly 1-line and properly paced."""
+    if not cues or not isinstance(cues, list):
+        return []
+    sanitized = []
+    for cue in cues:
+        if not isinstance(cue, (list, tuple)) or len(cue) < 3:
+            continue
+        st, en, text = cue[0], cue[1], str(cue[2])
+        clean_text = " ".join(text.replace("\n", " ").split())
+        if not clean_text:
+            continue
+        parts = split_text(clean_text, 45)
+        if len(parts) <= 1:
+            sanitized.append([round(st, 2), round(en, 2), parts[0] if parts else clean_text])
         else:
-            if cur:
-                out.append(cur)
-            cur = p
-    if cur:
-        out.append(cur)
-    return out
+            total_len = sum(len(p) for p in parts) or 1
+            dur = max(0.6, en - st)
+            t = st
+            for p in parts:
+                p_dur = dur * (len(p) / total_len)
+                p_en = round(t + p_dur, 2)
+                sanitized.append([round(t, 2), p_en, p])
+                t = p_en
+    return sanitized
 
 def shape(sents):
     cues = []
@@ -438,11 +479,12 @@ def shape(sents):
         text = text.strip()
         if not text:
             continue
-        parts = split_text(text)
-        total = sum(len(p) for p in parts)
+        parts = split_text(text, 45)
+        total = sum(len(p) for p in parts) or 1
         t = s
+        dur = max(0.5, e - s)
         for p in parts:
-            d = (e - s) * len(p) / total
+            d = dur * (len(p) / total)
             cues.append([t, t + d, p])
             t += d
     for i, c in enumerate(cues):
@@ -451,7 +493,7 @@ def shape(sents):
             c[1] = c[0] + need
         if i + 1 < len(cues):
             c[1] = max(c[0] + 0.3, min(c[1], cues[i + 1][0] - GAP))
-        c[0], c[1], c[2] = round(c[0], 2), round(c[1], 2), wrap(c[2])
+        c[0], c[1], c[2] = round(c[0], 2), round(c[1], 2), " ".join(c[2].replace("\n", " ").split())
     return cues
 
 # ============================================================================
@@ -560,7 +602,8 @@ def block(v: str, i: int):
         return {"state": "error", "msg": "bad args"}
     p = cpath(v, i)
     if p.exists():
-        return {"state": "ready", "cues": json.loads(p.read_text("utf-8"))}
+        raw_cues = json.loads(p.read_text("utf-8"))
+        return {"state": "ready", "cues": sanitize_cues(raw_cues)}
     key = (v, i)
 
     # Kick off the full-audio download if not started yet
@@ -639,7 +682,7 @@ def export_subs(v: str, fmt: str = "srt", title: str = ""):
         try:
             cues = json.loads(f.read_text("utf-8"))
             if isinstance(cues, list):
-                all_cues.extend(cues)
+                all_cues.extend(sanitize_cues(cues))
         except Exception:
             pass
     if not all_cues:
@@ -666,6 +709,31 @@ def export_subs(v: str, fmt: str = "srt", title: str = ""):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
+def print_lm_warning(title, detail, loaded=None):
+    try:
+        os.system("")  # Enable ANSI color sequences in Windows console
+    except Exception:
+        pass
+    RED = "\033[1;91m"
+    YELLOW = "\033[1;93m"
+    CYAN = "\033[1;96m"
+    WHITE = "\033[1;97m"
+    RESET = "\033[0m"
+    line = "=" * 74
+    print(f"\n{RED}{line}", file=sys.stderr)
+    print(f" [!] {title.upper()}", file=sys.stderr)
+    print(f"{'-' * 74}{RESET}", file=sys.stderr)
+    print(f" {detail}\n", file=sys.stderr)
+    if loaded is not None:
+        print(f" {YELLOW}Loaded in LM Studio:{RESET} {CYAN}{loaded or 'None'}{RESET}\n", file=sys.stderr)
+    print(f" {WHITE}Action required before watching:{RESET}", file=sys.stderr)
+    print(f"   {YELLOW}1.{RESET} Open {WHITE}LM Studio{RESET} -> go to the {CYAN}Local Server (<->){RESET} tab.", file=sys.stderr)
+    print(f"   {YELLOW}2.{RESET} Load model {CYAN}'{LLM_MODEL}'{RESET}.", file=sys.stderr)
+    print(f"   {YELLOW}3.{RESET} Ensure the server is {WHITE}Started{RESET} (port 1234).", file=sys.stderr)
+    print(f"   {YELLOW}4.{RESET} If LM Studio was already open or frozen, {WHITE}restart LM Studio{RESET} first.", file=sys.stderr)
+    print(f"   {YELLOW}5.{RESET} Close this terminal and run {CYAN}start.bat{RESET} again.", file=sys.stderr)
+    print(f"{RED}{line}{RESET}\n", file=sys.stderr)
+
 def preflight():
     """Fail fast with a human-readable message when a required tool is missing."""
     problems = []
@@ -675,11 +743,16 @@ def preflight():
         r = requests.get(LLM_URL.rsplit("/", 2)[0] + "/models", timeout=5)
         ids = [m.get("id", "") for m in r.json().get("data", [])]
         if LLM_MODEL not in ids:
-            dlog(f"WARNING: LLM_MODEL={LLM_MODEL!r} is not loaded in LM Studio (loaded: {ids}). "
-                 f"Translation will fail until you load it.")
+            print_lm_warning(
+                f"Model '{LLM_MODEL}' Not Loaded in LM Studio",
+                f"LM Studio is running, but model '{LLM_MODEL}' is not loaded.",
+                loaded=ids
+            )
     except Exception as ex:
-        dlog(f"WARNING: LM Studio is not reachable at {LLM_URL} ({ex}). "
-             f"Start it and load {LLM_MODEL!r} before watching.")
+        print_lm_warning(
+            "LM Studio is Not Connected",
+            f"LiveSubs could not reach LM Studio at {LLM_URL} ({ex})."
+        )
     if problems:
         raise SystemExit("Missing requirements:\n- " + "\n- ".join(problems))
 
