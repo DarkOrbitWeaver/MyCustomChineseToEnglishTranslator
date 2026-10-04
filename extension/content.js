@@ -2,7 +2,7 @@
   'use strict';
   const BLOCK = 60;                       // must match server.py
   const cfg = { enabled: false, lookahead: 300, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' };
-  let vid = null, blocks = new Map(), queuedBlocks = new Set(), online = false, busy = false, nextTry = 0, dlPct = -1;
+  let vid = null, blocks = new Map(), queuedBlocks = new Map(), online = false, busy = false, nextTry = 0, dlPct = -1;
   let lastHb = 0, lastHbCur = -1;
 
   const elog = m => console.log('[LiveSubs]', m);
@@ -476,9 +476,14 @@
 
     const t = v.currentTime, cur = Math.floor(t / BLOCK);
 
-    // Send active heartbeat with current playhead every 8s, or immediately on seek
-    const seeked = Math.abs(cur - lastHbCur) >= 2;
-    if ((!v.paused && Date.now() - lastHb > 8000) || seeked) {
+    // Detect seek jump: clear queue tracking so new playhead position takes immediate priority
+    const seeked = lastHbCur >= 0 && Math.abs(cur - lastHbCur) >= 2;
+    if (seeked) {
+      queuedBlocks.clear();
+    }
+
+    // Send active heartbeat with current playhead every 6s, or immediately on seek
+    if ((!v.paused && Date.now() - lastHb > 6000) || seeked) {
       lastHb = Date.now();
       lastHbCur = cur;
       api('/heartbeat?v=' + vid + '&cur=' + cur);
@@ -493,21 +498,12 @@
     }
     if (!missing.length) return;
 
-    // Immediately pre-queue future missing blocks on the server so the worker never sleeps
-    for (let j = 1; j < missing.length; j++) {
-      const fb = missing[j];
-      if (!queuedBlocks.has(fb)) {
-        queuedBlocks.add(fb);
-        api('/block?v=' + vid + '&i=' + fb);
-      }
-    }
-
-    // Poll the most urgent missing block
+    // STEP 1: URGENT PRIORITY — Request & poll the current watching block FIRST!
     const want = missing[0];
     if (Date.now() < nextTry) return;
     busy = true;
     const forVid = vid;
-    const r = await api('/block?v=' + vid + '&i=' + want);
+    const r = await api('/block?v=' + vid + '&i=' + want + '&cur=' + cur);
     busy = false;
     if (forVid !== vid) return;
     if (r.error) { online = false; elog('block ' + forVid + ':' + want + ' error: ' + r.error); return; }
@@ -520,6 +516,18 @@
     else if (r.state === 'downloading') { dlPct = r.progress || 0; nextTry = Date.now() + 2000; }
     else if (r.state === 'error') { nextTry = Date.now() + 10000; elog('block ' + forVid + ':' + want + ' failed: ' + (r.msg || '')); }
     else { nextTry = Date.now() + 600; }
+
+    // STEP 2: LOOKAHEAD BUFFER — Pre-queue future missing blocks in sequential order (cur+1, cur+2...)
+    // Automatically re-ping every 35s if a block has been waiting so the queue never goes cold
+    const nowMs = Date.now();
+    for (let j = 1; j < missing.length; j++) {
+      const fb = missing[j];
+      const lastSent = queuedBlocks.get(fb) || 0;
+      if (nowMs - lastSent > 35000) {
+        queuedBlocks.set(fb, nowMs);
+        api('/block?v=' + vid + '&i=' + fb + '&cur=' + cur);
+      }
+    }
   }
 
   // ---- Render subtitles ----

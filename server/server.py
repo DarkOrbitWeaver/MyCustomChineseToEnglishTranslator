@@ -533,19 +533,28 @@ def process(key):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+def is_buffer_ahead_ready(vid: str, cur_playhead: int, min_blocks: int = 2) -> bool:
+    """Check if all continuous blocks from cur_playhead to cur_playhead + min_blocks are cached on disk."""
+    for bi in range(cur_playhead, cur_playhead + min_blocks):
+        if not cpath(vid, bi).exists():
+            return False
+    return True
+
 def worker():
     fails, cooldown_until = {}, {}
     while True:
         with cv:
             while True:
                 now = time.time()
-                # Drop stale queued blocks (user seeked away >60s ago or video closed/paused >25s ago)
+                # Drop stale queued blocks ONLY if user closed video/tab (>25s) or seeked past it.
+                # Queued blocks legitimately wait in line for their turn in the lookahead pipeline;
+                # NEVER evict them based on an arbitrary age timeout.
                 for k, t in list(lastreq.items()):
                     hb = _last_heartbeat.get(k[0], (t, 0))
                     hb_time = hb[0] if isinstance(hb, (tuple, list)) else hb
                     cur_playhead = hb[1] if isinstance(hb, (tuple, list)) else 0
                     is_past = cur_playhead > 0 and (k[1] < cur_playhead - 1)
-                    if state.get(k) == "queued" and (now - t > 60 or now - hb_time > 25 or is_past):
+                    if state.get(k) == "queued" and (now - hb_time > 25 or is_past):
                         state.pop(k, None); lastreq.pop(k, None)
                 cand = [k for k in lastreq
                         if state.get(k) == "queued"
@@ -566,12 +575,11 @@ def worker():
         try:
             process(key); state.pop(key, None); fails.pop(key, None)
             # Smart Adaptive Cooldown:
-            # If playhead is close (< 2 blocks), skip cooldown (0s) to keep up!
-            # Only sleep when safely >= 2 blocks ahead.
+            # ONLY sleep if the continuous buffer from cur_playhead is safely ready >= 2 blocks ahead on disk!
+            # If any upcoming block is missing, cooldown is 0s to keep up.
             hb_data = _last_heartbeat.get(key[0])
             cur_playhead = hb_data[1] if (hb_data and isinstance(hb_data, (tuple, list))) else 0
-            blocks_ahead = key[1] - cur_playhead
-            if blocks_ahead >= 2 and BLOCK_COOLDOWN > 0:
+            if is_buffer_ahead_ready(key[0], cur_playhead, 2) and BLOCK_COOLDOWN > 0:
                 time.sleep(BLOCK_COOLDOWN)
         except AudioNotReady:
             # Audio is still downloading — retry soon, don't count as failure
@@ -612,9 +620,11 @@ def config(cooldown: float = None, batch_size: int = None):
     return {"ok": True, "cooldown": BLOCK_COOLDOWN, "batch_size": BATCH_SIZE}
 
 @app.get("/block")
-def block(v: str, i: int):
+def block(v: str, i: int, cur: int = -1):
     if not re.fullmatch(r"[A-Za-z0-9_-]{11}", v) or i < 0:
         return {"state": "error", "msg": "bad args"}
+    if cur >= 0:
+        _last_heartbeat[v] = (time.time(), cur)
     p = cpath(v, i)
     if p.exists():
         raw_cues = json.loads(p.read_text("utf-8"))
