@@ -5,6 +5,7 @@ import os, re, json, sys, time, wave, shutil, threading, tempfile, subprocess, t
 from pathlib import Path
 import requests, uvicorn, torch
 from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 ROOT = Path(__file__).resolve().parent   # absolute: independent of working directory
@@ -494,9 +495,10 @@ def worker():
         with cv:
             while True:
                 now = time.time()
-                # Drop stale queued blocks (user seeked away >60s ago)
+                # Drop stale queued blocks (user seeked away >60s ago or video closed/paused >25s ago)
                 for k, t in list(lastreq.items()):
-                    if state.get(k) == "queued" and now - t > 60:
+                    hb = _last_heartbeat.get(k[0], t)
+                    if state.get(k) == "queued" and (now - t > 60 or now - hb > 25):
                         state.pop(k, None); lastreq.pop(k, None)
                 cand = [k for k in lastreq
                         if state.get(k) == "queued"
@@ -569,6 +571,88 @@ def block(v: str, i: int):
         if dl_status == "downloading":
             return {"state": "downloading", "progress": round(dl_progress, 1)}
         return {"state": state[key]}
+
+_last_heartbeat = {}
+
+@app.get("/heartbeat")
+def heartbeat(v: str):
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", v):
+        _last_heartbeat[v] = time.time()
+    return {"ok": True}
+
+@app.api_route("/retry", methods=["GET", "POST"])
+def retry_block(v: str, i: int):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", v) or i < 0:
+        return {"ok": False, "msg": "bad args"}
+    p = cpath(v, i)
+    if p.exists():
+        try:
+            p.unlink()
+        except Exception:
+            pass
+    key = (v, i)
+    with cv:
+        state.pop(key, None)
+        lastreq.pop(key, None)
+        cv.notify()
+    dlog(f"block {v}:{i} reset for retry")
+    return {"ok": True}
+
+def format_srt_time(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int(round((seconds - int(seconds)) * 1000))
+    if ms >= 1000:
+        s += 1; ms -= 1000
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+@app.get("/export")
+def export_subs(v: str, fmt: str = "srt", title: str = ""):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", v):
+        return PlainTextResponse("Invalid video ID", status_code=400)
+    d = CACHE / v
+    if not d.exists():
+        return PlainTextResponse("No subtitles found for this video", status_code=404)
+    files = []
+    for f in d.glob("*.json"):
+        if f.stem.isdigit():
+            files.append((int(f.stem), f))
+    files.sort(key=lambda x: x[0])
+    if not files:
+        return PlainTextResponse("No subtitles found for this video", status_code=404)
+
+    all_cues = []
+    for _, f in files:
+        try:
+            cues = json.loads(f.read_text("utf-8"))
+            if isinstance(cues, list):
+                all_cues.extend(cues)
+        except Exception:
+            pass
+    if not all_cues:
+        return PlainTextResponse("No cues available", status_code=404)
+
+    all_cues.sort(key=lambda c: c[0])
+    lines = []
+    for idx, (st, en, text) in enumerate(all_cues, 1):
+        lines.append(str(idx))
+        lines.append(f"{format_srt_time(st)} --> {format_srt_time(en)}")
+        lines.append(text)
+        lines.append("")
+
+    filename = f"{v}_English.srt"
+    if title:
+        safe_title = re.sub(r'[\\/*?:"<>|]', "_", title).strip()
+        if safe_title:
+            filename = f"{safe_title[:80]}_English.srt"
+
+    content = "\n".join(lines)
+    return PlainTextResponse(
+        content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 def preflight():
     """Fail fast with a human-readable message when a required tool is missing."""
