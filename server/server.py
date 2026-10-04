@@ -34,8 +34,8 @@ LLM_MODEL = os.getenv("LLM_MODEL", "local-model")
 ASR_ID = os.getenv("ASR_MODEL", "Qwen/Qwen3-ASR-1.7B")   # set to Qwen/Qwen3-ASR-0.6B if VRAM is tight
 ALIGN_ID = "Qwen/Qwen3-ForcedAligner-0.6B"
 
-# subtitle style (Netflix-ish)
-MAXC, MIN_DUR, GAP = 42, 1.0, 0.05
+# subtitle style (prefer single line like YouTube captions, wrap only when long)
+MAXC, MIN_DUR, GAP = 80, 1.0, 0.05
 CPS = float(os.getenv("CPS", "17"))
 
 ASR = None

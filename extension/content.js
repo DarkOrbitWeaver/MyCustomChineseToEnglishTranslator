@@ -47,7 +47,7 @@
   #ls-btn svg{padding:8px;box-sizing:border-box}
   #ls-win{visibility:visible!important;text-align:center;width:100%}
   #ls-sub{display:inline-block;padding:3px 10px;border-radius:4px;font-family:'YouTube Noto',Roboto,Arial,sans-serif;
-    white-space:pre-wrap;line-height:1.4;max-width:80%}
+    white-space:pre-wrap;line-height:1.4;max-width:85%;box-sizing:border-box;overflow-wrap:break-word;word-break:break-word}
   `;
 
   // ---- Inline SVG for the player-bar button (tiny version of the icon) ----
@@ -296,9 +296,11 @@
       span.parentElement.style.display = 'none';
       return;
     }
-    // Show subtitle
+    // Show subtitle: prefer single long line, wrap naturally within container
     span.replaceChildren();
-    text.split('\n').forEach((line, i) => {
+    const isMultiSpeaker = text.includes('\n') && text.split('\n').some(l => /^\s*[-—–]/.test(l));
+    const displayText = isMultiSpeaker ? text : text.replace(/\s*\n\s*/g, ' ');
+    displayText.split('\n').forEach((line, i) => {
       if (i) span.appendChild(document.createElement('br'));
       span.appendChild(document.createTextNode(line));
     });
