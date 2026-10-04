@@ -3,7 +3,7 @@ Run: python server.py   (listens on 127.0.0.1:8765)
 """
 import os, re, json, sys, time, wave, shutil, threading, tempfile, subprocess, textwrap, traceback
 from pathlib import Path
-import requests, uvicorn
+import requests, uvicorn, torch
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -471,6 +471,8 @@ def process(key):
         wav = grab(vid, a, e + PAD, Path(td))
         stage("asr")
         zh = asr_sentences(wav, a)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     zh = [x for x in zh if s <= (x[1] + x[2]) / 2 < e]   # block owns sentences whose midpoint is inside it
     cues = []
     if zh:
@@ -483,6 +485,8 @@ def process(key):
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(cues, ensure_ascii=False), "utf-8")
     tmp.replace(p)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 def worker():
     fails, cooldown_until = {}, {}
