@@ -1,3 +1,7 @@
+this shit is hard and unpolished tbh. if u really need this just ask some local ai (like: opencode) to set it for you, it be much easier since u can adjust it and improve the code yourself.
+i made this with the help of AI to help me watch some cultivation novel ai animations that dont have subs, it works for me, so:)
+
+
 # LiveSubs — live English subtitles for Chinese YouTube videos
 
 I made this so I can watch Chinese cultivation / xianxia / system-novel
