@@ -2,7 +2,7 @@
   'use strict';
   const BLOCK = 60;                       // must match server.py
   const cfg = { enabled: false, lookahead: 180, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' };
-  let vid = null, blocks = new Map(), online = false, busy = false, nextTry = 0, dlPct = -1;
+  let vid = null, blocks = new Map(), queuedBlocks = new Set(), online = false, busy = false, nextTry = 0, dlPct = -1;
   let lastHb = 0;
 
   const elog = m => console.log('[LiveSubs]', m);
@@ -473,17 +473,34 @@
     const v = video();
     if (!cfg.enabled || !online || !v || !vid || busy || !isFinite(v.duration)) return;
 
-    // Send active heartbeat to server every 10s while video is playing
-    if (!v.paused && Date.now() - lastHb > 10000) {
+    const t = v.currentTime, cur = Math.floor(t / BLOCK);
+
+    // Send active heartbeat with current playhead to server every 8s while video is playing
+    if (!v.paused && Date.now() - lastHb > 8000) {
       lastHb = Date.now();
-      api('/heartbeat?v=' + vid);
+      api('/heartbeat?v=' + vid + '&cur=' + cur);
     }
 
-    const t = v.currentTime, cur = Math.floor(t / BLOCK);
     const last = Math.min(Math.floor(v.duration / BLOCK), Math.floor((t + (cfg.lookahead || 180)) / BLOCK));
-    let want = null;
-    for (let i = cur; i <= last; i++) if (!blocks.has(i)) { want = i; break; }
-    if (want === null) return;
+
+    // Find all missing blocks in the lookahead buffer window
+    const missing = [];
+    for (let i = cur; i <= last; i++) {
+      if (!blocks.has(i)) missing.push(i);
+    }
+    if (!missing.length) return;
+
+    // Immediately pre-queue future missing blocks on the server so the worker never sleeps
+    for (let j = 1; j < missing.length; j++) {
+      const fb = missing[j];
+      if (!queuedBlocks.has(fb)) {
+        queuedBlocks.add(fb);
+        api('/block?v=' + vid + '&i=' + fb);
+      }
+    }
+
+    // Poll the most urgent missing block
+    const want = missing[0];
     if (Date.now() < nextTry) return;
     busy = true;
     const forVid = vid;
@@ -493,12 +510,13 @@
     if (r.error) { online = false; elog('block ' + forVid + ':' + want + ' error: ' + r.error); return; }
     if (r.state === 'ready') {
       blocks.set(want, r.cues);
+      queuedBlocks.delete(want);
       dlPct = -1;
       elog('block ' + want + ' ready (' + r.cues.length + ' cues)');
     }
     else if (r.state === 'downloading') { dlPct = r.progress || 0; nextTry = Date.now() + 2000; }
     else if (r.state === 'error') { nextTry = Date.now() + 10000; elog('block ' + forVid + ':' + want + ' failed: ' + (r.msg || '')); }
-    else { nextTry = Date.now() + 800; }
+    else { nextTry = Date.now() + 600; }
   }
 
   // ---- Render subtitles ----
@@ -580,6 +598,7 @@
   function onNav() {
     vid = videoId();
     blocks.clear();
+    queuedBlocks.clear();
     busy = false;
     nextTry = 0;
     dlPct = -1;

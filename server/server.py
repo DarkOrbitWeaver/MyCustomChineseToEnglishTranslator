@@ -500,6 +500,7 @@ def shape(sents):
 #  JOB QUEUE — sequential block priority (lowest missing block from playhead)
 # ============================================================================
 state, lastreq = {}, {}
+_last_heartbeat = {}  # vid -> (timestamp, cur_playhead_block)
 cv = threading.Condition()
 
 def process(key):
@@ -540,8 +541,9 @@ def worker():
                 now = time.time()
                 # Drop stale queued blocks (user seeked away >60s ago or video closed/paused >25s ago)
                 for k, t in list(lastreq.items()):
-                    hb = _last_heartbeat.get(k[0], t)
-                    if state.get(k) == "queued" and (now - t > 60 or now - hb > 25):
+                    hb = _last_heartbeat.get(k[0], (t, 0))
+                    hb_time = hb[0] if isinstance(hb, (tuple, list)) else hb
+                    if state.get(k) == "queued" and (now - t > 60 or now - hb_time > 25):
                         state.pop(k, None); lastreq.pop(k, None)
                 cand = [k for k in lastreq
                         if state.get(k) == "queued"
@@ -557,7 +559,14 @@ def worker():
                 cv.wait(timeout=2)
         try:
             process(key); state.pop(key, None); fails.pop(key, None)
-            time.sleep(BLOCK_COOLDOWN)   # let GPU breathe between blocks
+            # Smart Adaptive Cooldown:
+            # If playhead is close (< 2 blocks), skip cooldown (0s) to keep up!
+            # Only sleep when safely >= 2 blocks ahead.
+            hb_data = _last_heartbeat.get(key[0])
+            cur_playhead = hb_data[1] if (hb_data and isinstance(hb_data, (tuple, list))) else 0
+            blocks_ahead = key[1] - cur_playhead
+            if blocks_ahead >= 2 and BLOCK_COOLDOWN > 0:
+                time.sleep(BLOCK_COOLDOWN)
         except AudioNotReady:
             # Audio is still downloading — retry soon, don't count as failure
             state[key] = "running:cooldown"
@@ -627,12 +636,10 @@ def block(v: str, i: int):
             return {"state": "downloading", "progress": round(dl_progress, 1)}
         return {"state": state[key]}
 
-_last_heartbeat = {}
-
 @app.get("/heartbeat")
-def heartbeat(v: str):
+def heartbeat(v: str, cur: int = 0):
     if re.fullmatch(r"[A-Za-z0-9_-]{11}", v):
-        _last_heartbeat[v] = time.time()
+        _last_heartbeat[v] = (time.time(), cur)
     return {"ok": True}
 
 @app.api_route("/retry", methods=["GET", "POST"])
