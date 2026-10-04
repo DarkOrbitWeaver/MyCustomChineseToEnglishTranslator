@@ -25,7 +25,7 @@ def dlog(msg):
         pass
 
 BLOCK = 60          # seconds per cached block (fixed grid -> cache reuse)
-PAD = 3             # seconds of extra audio each side so edge sentences aren't cut
+PAD = 5             # seconds of extra audio each side so edge sentences aren't cut
 BLOCK_COOLDOWN = 5  # seconds to rest between blocks (GPU breathing room)
 KEEP_DAYS = 30
 PORT = 8765
@@ -347,9 +347,10 @@ def translate(vid, lines):
     dlog(f"translate {vid}: {len(lines)} lines, {len(hits)} glossary hits")
     ctx = LAST.get(vid, [])[-3:]
     out = []
-    for j in range(0, len(lines), 30):
+    BATCH_SIZE = 12
+    for j in range(0, len(lines), BATCH_SIZE):
         t1 = time.time()
-        part = lines[j:j + 30]
+        part = lines[j:j + BATCH_SIZE]
         user = ""
         if hits:
             user += "Glossary:\n" + "\n".join(f"{k} = {v}" for k, v in hits.items()) + "\n\n"
@@ -387,7 +388,7 @@ def translate(vid, lines):
                     res.append("[?] " + l)  # mark so user knows it failed
         out += res
         ctx = (ctx + res)[-3:]
-        dlog(f"translate {vid} batch {j//30+1}: {len(part)} lines in {time.time()-t1:.0f}s")
+        dlog(f"translate {vid} batch {j//BATCH_SIZE+1}: {len(part)} lines in {time.time()-t1:.0f}s")
     LAST[vid] = (LAST.get(vid, []) + out)[-6:]
     return out
 
