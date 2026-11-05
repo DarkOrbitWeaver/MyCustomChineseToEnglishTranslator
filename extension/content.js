@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const BLOCK = 60;                       // must match server.py
-  const cfg = { enabled: false, lookahead: 300, cooldown: 5, batchSize: 12, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' };
+  const cfg = { enabled: false, lookahead: 300, cooldown: 5, batchSize: 16, subFont: 24, subBg: 75, subEdge: 2, subColor: '#ffffff' };
   let vid = null, blocks = new Map(), queuedBlocks = new Map(), online = false, busy = false, nextTry = 0, dlPct = -1;
   let lastHb = 0, lastHbCur = -1;
 
@@ -213,8 +213,8 @@
           </select></label>
           <label>Batch size <select id="ls-batch">
             <option value="8">8 lines (accurate)</option>
-            <option value="12">12 lines (default)</option>
-            <option value="16">16 lines</option>
+            <option value="12">12 lines</option>
+            <option value="16">16 lines (recommended)</option>
           </select></label>
         </div>
       `;

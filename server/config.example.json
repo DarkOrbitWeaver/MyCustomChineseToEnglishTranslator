@@ -10,5 +10,5 @@
   "align_model": "Qwen/Qwen3-ForcedAligner-0.6B",
   "cps": 17,
   "block_cooldown": 5.0,
-  "batch_size": 12
+  "batch_size": 16
 }

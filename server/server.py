@@ -43,7 +43,7 @@ def load_config():
         "align_model": "Qwen/Qwen3-ForcedAligner-0.6B",
         "cps": 17.0,
         "block_cooldown": 5.0,
-        "batch_size": 12,
+        "batch_size": 16,
     }
     if CONFIG_PATH.exists():
         try:
@@ -134,7 +134,7 @@ RATE_LIMITER = RateLimiter(rpm=CFG.get("rate_limit_rpm", 30))
 BLOCK = 60          # seconds per cached block (fixed grid -> cache reuse)
 PAD = 5             # seconds of extra audio each side so edge sentences aren't cut
 BLOCK_COOLDOWN = float(CFG.get("block_cooldown", 5.0))  # seconds to rest between blocks (GPU breathing room)
-BATCH_SIZE = int(CFG.get("batch_size", 12))       # lines per translation batch
+BATCH_SIZE = int(CFG.get("batch_size", 16))       # lines per translation batch
 KEEP_DAYS = 30
 PORT = 8765
 
