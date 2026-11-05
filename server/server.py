@@ -3,7 +3,11 @@ Run: python server.py   (listens on 127.0.0.1:8765)
 """
 import os, re, json, sys, time, wave, shutil, threading, tempfile, subprocess, textwrap, traceback
 from pathlib import Path
-import requests, uvicorn, torch
+import requests, uvicorn
+try:
+    import torch
+except ImportError:
+    torch = None
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -960,6 +964,13 @@ def preflight():
     problems = []
     if not shutil.which("ffmpeg"):
         problems.append("ffmpeg not found on PATH (winget install Gyan.FFmpeg, then reopen the terminal)")
+
+    if torch is None:
+        problems.append("PyTorch is not installed in server/.venv yet. (Please run setup.bat or wait for installation)")
+    try:
+        import qwen_asr
+    except ImportError:
+        problems.append("qwen-asr is not installed in server/.venv yet. (Please run setup.bat or wait for installation)")
 
     provider = CFG.get("provider", "nvidia")
     if provider == "nvidia":
