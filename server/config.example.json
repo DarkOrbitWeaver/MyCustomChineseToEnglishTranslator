@@ -1,0 +1,14 @@
+{
+  "provider": "nvidia",
+  "nvidia_api_key": "",
+  "nvidia_model": "nvidia/nemotron-3.5-bolt-e4b",
+  "enable_thinking": false,
+  "rate_limit_rpm": 30,
+  "local_llm_url": "http://127.0.0.1:1234/v1/chat/completions",
+  "local_model": "qwen3-4b-instruct-2507",
+  "asr_model": "Qwen/Qwen3-ASR-0.6B",
+  "align_model": "Qwen/Qwen3-ForcedAligner-0.6B",
+  "cps": 17,
+  "block_cooldown": 5.0,
+  "batch_size": 12
+}

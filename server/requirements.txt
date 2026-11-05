@@ -3,5 +3,6 @@ uvicorn
 requests
 yt-dlp
 qwen-asr
+huggingface_hub
 # install torch with CUDA FIRST (see README), e.g.:
 # pip install torch --index-url https://download.pytorch.org/whl/cu124

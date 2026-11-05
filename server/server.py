@@ -25,20 +25,127 @@ def dlog(msg):
     except Exception:
         pass
 
+CONFIG_PATH = ROOT / "config.json"
+CONFIG_EXAMPLE_PATH = ROOT / "config.example.json"
+
+def load_config():
+    """Load configuration from server/config.json with environment variable overrides."""
+    cfg = {
+        "provider": "nvidia",
+        "nvidia_api_key": "",
+        "nvidia_model": "nvidia/nemotron-3.5-bolt-e4b",
+        "nvidia_url": "https://integrate.api.nvidia.com/v1/chat/completions",
+        "enable_thinking": False,
+        "rate_limit_rpm": 30,
+        "local_llm_url": "http://127.0.0.1:1234/v1/chat/completions",
+        "local_model": "qwen3-4b-instruct-2507",
+        "asr_model": "Qwen/Qwen3-ASR-0.6B",
+        "align_model": "Qwen/Qwen3-ForcedAligner-0.6B",
+        "cps": 17.0,
+        "block_cooldown": 5.0,
+        "batch_size": 12,
+    }
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                if isinstance(saved, dict):
+                    cfg.update(saved)
+        except Exception as e:
+            dlog(f"[Config] Error reading {CONFIG_PATH}: {e}")
+    # Environment variables override config
+    if os.getenv("NVIDIA_API_KEY"):
+        cfg["nvidia_api_key"] = os.getenv("NVIDIA_API_KEY").strip()
+    if os.getenv("LLM_PROVIDER"):
+        cfg["provider"] = os.getenv("LLM_PROVIDER").strip().lower()
+    if os.getenv("LLM_MODEL"):
+        if cfg.get("provider") == "nvidia":
+            cfg["nvidia_model"] = os.getenv("LLM_MODEL").strip()
+        else:
+            cfg["local_model"] = os.getenv("LLM_MODEL").strip()
+    if os.getenv("LLM_URL"):
+        if cfg.get("provider") == "nvidia":
+            cfg["nvidia_url"] = os.getenv("LLM_URL").strip()
+        else:
+            cfg["local_llm_url"] = os.getenv("LLM_URL").strip()
+    if os.getenv("ASR_MODEL"):
+        cfg["asr_model"] = os.getenv("ASR_MODEL").strip()
+    if os.getenv("CPS"):
+        try:
+            cfg["cps"] = float(os.getenv("CPS"))
+        except ValueError:
+            pass
+    return cfg
+
+def save_config(cfg):
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        dlog(f"[Config] Error saving {CONFIG_PATH}: {e}")
+
+def check_or_prompt_api_key(cfg):
+    """If provider is nvidia and API key is missing, prompt interactively in console."""
+    if cfg.get("provider") != "nvidia":
+        return cfg
+    key = cfg.get("nvidia_api_key", "").strip()
+    if not key or key == "YOUR_NVIDIA_API_KEY_HERE":
+        print("\n" + "=" * 68)
+        print(" [!] LiveSubs: NVIDIA API Key Needed")
+        print("=" * 68)
+        print(" Config file: server/config.json")
+        print(" Using model: " + cfg.get("nvidia_model", "nvidia/nemotron-3.5-bolt-e4b"))
+        print(" Enter your NVIDIA API key below (or press Enter for local LM Studio):")
+        try:
+            user_input = input(" NVIDIA API Key: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            user_input = ""
+        if user_input:
+            cfg["nvidia_api_key"] = user_input
+            save_config(cfg)
+            print(" [OK] API key saved to server/config.json (git-ignored, kept local).\n")
+        else:
+            print(" [i] No key entered. Switching to local LM Studio mode.\n")
+            cfg["provider"] = "local"
+    return cfg
+
+CFG = load_config()
+
+class RateLimiter:
+    """Sliding-window rate limiter to keep requests safely within RPM limits."""
+    def __init__(self, rpm: int = 30):
+        self.rpm = max(1, rpm)
+        self.timestamps = []
+        self.lock = threading.Lock()
+
+    def acquire(self):
+        with self.lock:
+            now = time.time()
+            self.timestamps = [t for t in self.timestamps if now - t < 60.0]
+            if len(self.timestamps) >= self.rpm:
+                wait_time = 60.0 - (now - self.timestamps[0]) + 0.1
+                if wait_time > 0:
+                    dlog(f"[RateLimit] Throttling for {wait_time:.1f}s to stay under {self.rpm} RPM limit")
+                    time.sleep(wait_time)
+            self.timestamps.append(time.time())
+
+RATE_LIMITER = RateLimiter(rpm=CFG.get("rate_limit_rpm", 30))
+
 BLOCK = 60          # seconds per cached block (fixed grid -> cache reuse)
 PAD = 5             # seconds of extra audio each side so edge sentences aren't cut
-BLOCK_COOLDOWN = 5.0  # seconds to rest between blocks (GPU breathing room)
-BATCH_SIZE = 12       # lines per translation batch
+BLOCK_COOLDOWN = float(CFG.get("block_cooldown", 5.0))  # seconds to rest between blocks (GPU breathing room)
+BATCH_SIZE = int(CFG.get("batch_size", 12))       # lines per translation batch
 KEEP_DAYS = 30
 PORT = 8765
-LLM_URL = os.getenv("LLM_URL", "http://127.0.0.1:1234/v1/chat/completions")   # LM Studio default
-LLM_MODEL = os.getenv("LLM_MODEL", "local-model")
-ASR_ID = os.getenv("ASR_MODEL", "Qwen/Qwen3-ASR-1.7B")   # set to Qwen/Qwen3-ASR-0.6B if VRAM is tight
-ALIGN_ID = "Qwen/Qwen3-ForcedAligner-0.6B"
+
+LLM_URL = CFG.get("nvidia_url") if CFG.get("provider") == "nvidia" else CFG.get("local_llm_url", "http://127.0.0.1:1234/v1/chat/completions")
+LLM_MODEL = CFG.get("nvidia_model") if CFG.get("provider") == "nvidia" else CFG.get("local_model", "qwen3-4b-instruct-2507")
+ASR_ID = CFG.get("asr_model", "Qwen/Qwen3-ASR-0.6B")   # set to Qwen/Qwen3-ASR-0.6B if VRAM is tight
+ALIGN_ID = CFG.get("align_model", "Qwen/Qwen3-ForcedAligner-0.6B")
 
 # subtitle style (prefer single line like YouTube captions, wrap only when long)
 MAXC, MIN_DUR, GAP = 80, 1.0, 0.05
-CPS = float(os.getenv("CPS", "17"))
+CPS = float(CFG.get("cps", 17.0))
 
 ASR = None
 PUNCT = set("，。！？；：、,.!?;:…—-\"'""''（）() \n")
@@ -266,17 +373,78 @@ Translate each Chinese line into natural, concise English subtitle lines.
 
 LAST = {}
 
-def llm(msgs):
-    r = requests.post(LLM_URL, json={"model": LLM_MODEL, "messages": msgs,
-                                     "temperature": 0.2, "max_tokens": 4096}, timeout=300)
-    r.raise_for_status()
-    t = r.json()["choices"][0]["message"]["content"]
-    return re.sub(r"<think>.*?</think>", "", t, flags=re.S).strip()
+def clean_model_output(t: str) -> str:
+    """Strip thinking tags, markdown code blocks, and extra whitespace."""
+    if not t:
+        return ""
+    t = re.sub(r"<think>.*?</think>", "", t, flags=re.S).strip()
+    # Strip markdown code blocks like ```json ... ``` or ``` ... ```
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", t)
+    if m:
+        t = m.group(1).strip()
+    return t
+
+def llm(msgs, max_retries=4):
+    provider = CFG.get("provider", "nvidia")
+    if provider == "nvidia":
+        api_key = CFG.get("nvidia_api_key", "").strip()
+        model = CFG.get("nvidia_model", "nvidia/nemotron-3.5-bolt-e4b")
+        url = CFG.get("nvidia_url", "https://integrate.api.nvidia.com/v1/chat/completions")
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        payload = {
+            "model": model,
+            "messages": msgs,
+            "temperature": 0.2,
+            "top_p": 0.95,
+            "max_tokens": 4096,
+            "chat_template_kwargs": {
+                "enable_thinking": bool(CFG.get("enable_thinking", False))
+            }
+        }
+    else:
+        model = CFG.get("local_model", "qwen3-4b-instruct-2507")
+        url = CFG.get("local_llm_url", "http://127.0.0.1:1234/v1/chat/completions")
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "model": model,
+            "messages": msgs,
+            "temperature": 0.2,
+            "max_tokens": 4096
+        }
+
+    for attempt in range(max_retries):
+        if provider == "nvidia":
+            RATE_LIMITER.acquire()
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=90)
+            if r.status_code == 429:
+                retry_after = r.headers.get("Retry-After")
+                wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else (5.0 * (2 ** attempt))
+                dlog(f"[LLM] Rate limit 429 hit. Waiting {wait_sec:.1f}s before retry (attempt {attempt+1}/{max_retries})")
+                time.sleep(wait_sec)
+                continue
+            r.raise_for_status()
+            res_json = r.json()
+            if "choices" in res_json and len(res_json["choices"]) > 0:
+                raw_text = res_json["choices"][0]["message"]["content"]
+                return clean_model_output(raw_text)
+            else:
+                dlog(f"[LLM] Unexpected response format: {res_json}")
+        except requests.exceptions.RequestException as e:
+            wait_sec = 2.0 * (2 ** attempt)
+            dlog(f"[LLM] Request failed: {e}. Retrying in {wait_sec:.1f}s (attempt {attempt+1}/{max_retries})")
+            time.sleep(wait_sec)
+    raise RuntimeError(f"LLM translation request failed after {max_retries} attempts.")
+
 def parse_one(t):
     """Robust parser for single-line translations: handles arrays, quoted strings, or plain text."""
     if not t:
         return None
-    t = t.strip()
+    t = clean_model_output(t)
     # 1. Try standard JSON array ["..."]
     m = re.search(r"\[.*\]", t, re.S)
     if m:
@@ -295,8 +463,8 @@ def parse_one(t):
         except Exception:
             pass
         return t[1:-1].strip()
-    # 3. Strip markdown wrappers and quotes
-    cleaned = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", t).strip()
+    # 3. Strip quotes
+    cleaned = t.strip()
     if cleaned.startswith('"') and cleaned.endswith('"'):
         cleaned = cleaned[1:-1].strip()
     # Valid if it contains actual Latin letters (English text)
@@ -307,6 +475,7 @@ def parse_one(t):
 def parse_arr(t, n):
     if not t:
         return None
+    t = clean_model_output(t)
     if n == 1:
         s = parse_one(t)
         return [s] if s else None
@@ -344,6 +513,17 @@ def glossary_hits(text, cap=80):
     hits = sorted((k for k in gl if k in text), key=len, reverse=True)[:cap]   # longest (most specific) first
     return {k: gl[k] for k in hits}
 
+def translate_chunk(lines, hits, ctx):
+    """Translate a chunk of lines with glossary and context."""
+    user = ""
+    if hits:
+        user += "Glossary:\n" + "\n".join(f"{k} = {v}" for k, v in hits.items()) + "\n\n"
+    if ctx:
+        user += "Previous lines (context only, do NOT translate):\n" + "\n".join(ctx) + "\n\n"
+    user += "Translate these lines:\n" + json.dumps(lines, ensure_ascii=False)
+    msgs = [{"role": "system", "content": SYS}, {"role": "user", "content": user}]
+    return parse_arr(llm(msgs), len(lines))
+
 def translate(vid, lines):
     hits = glossary_hits("".join(lines))
     dlog(f"translate {vid}: {len(lines)} lines, {len(hits)} glossary hits")
@@ -353,14 +533,9 @@ def translate(vid, lines):
     for j in range(0, len(lines), bs):
         t1 = time.time()
         part = lines[j:j + bs]
-        user = ""
-        if hits:
-            user += "Glossary:\n" + "\n".join(f"{k} = {v}" for k, v in hits.items()) + "\n\n"
-        if ctx:
-            user += "Previous lines (context only, do NOT translate):\n" + "\n".join(ctx) + "\n\n"
-        user += "Translate these lines:\n" + json.dumps(part, ensure_ascii=False)
-        res = parse_arr(llm([{"role": "system", "content": SYS}, {"role": "user", "content": user}]), len(part))
-        # Check for Chinese leaking through: re-translate any untranslated lines
+        res = translate_chunk(part, hits, ctx)
+
+        # Chinese leak check: re-translate lines where Chinese leaked without English
         if res:
             for ri, txt in enumerate(res):
                 has_cjk = any('\u4e00' <= c <= '\u9fff' for c in txt)
@@ -370,24 +545,38 @@ def translate(vid, lines):
                                          {"role": "user", "content": "Translate these lines:\n" + json.dumps([part[ri]], ensure_ascii=False)}]), 1)
                     if one and one[0]:
                         res[ri] = one[0]
-                        dlog(f"translate {vid}: re-translated line {ri}: {part[ri][:30]} -> {one[0][:30]}")
-        if res is None:   # model broke the format -> go line by line
-            dlog(f"translate {vid}: batch parse failed, retrying line-by-line")
+                        dlog(f"translate {vid}: re-translated leaked line {ri}: {part[ri][:30]} -> {one[0][:30]}")
+
+        # If batch parse failed: try binary sub-batch split first before falling back to line-by-line
+        if res is None:
+            dlog(f"translate {vid}: batch parse failed for {len(part)} lines, attempting binary sub-batch split")
+            if len(part) > 1:
+                mid = len(part) // 2
+                res_a = translate_chunk(part[:mid], hits, ctx)
+                res_b = translate_chunk(part[mid:], hits, (ctx + (res_a or []))[-3:])
+                if res_a is not None and res_b is not None:
+                    res = res_a + res_b
+                    dlog(f"translate {vid}: binary sub-batch split succeeded ({len(res)} lines)")
+
+        # If still None, translate line-by-line (with rate-limiter protection)
+        if res is None:
+            dlog(f"translate {vid}: sub-batch failed, falling back to line-by-line translation")
             res = []
             for l in part:
                 got = None
-                for attempt in range(3):
+                try:
                     one = parse_arr(llm([{"role": "system", "content": SYS},
                                          {"role": "user", "content": "Translate these lines:\n" + json.dumps([l], ensure_ascii=False)}]), 1)
-                    if one and one[0] and not any('\u4e00' <= c <= '\u9fff' for c in one[0]):
-                        got = one[0]; break  # valid English output
-                    elif one:
-                        got = one[0]; break  # has some Chinese but at least LLM responded
+                    if one and one[0]:
+                        got = one[0]
+                except Exception as ex:
+                    dlog(f"translate {vid}: line translation error: {ex}")
                 if got:
                     res.append(got)
                 else:
                     dlog(f"translate {vid}: line untranslatable: {l[:40]}")
-                    res.append("[?] " + l)  # mark so user knows it failed
+                    res.append("[?] " + l)
+
         out += res
         ctx = (ctx + res)[-3:]
         dlog(f"translate {vid} batch {j//BATCH_SIZE+1}: {len(part)} lines in {time.time()-t1:.0f}s")
@@ -606,7 +795,16 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.get("/health")
 def health():
-    return {"ok": True, "asr": ASR_ID, "llm": LLM_MODEL, "root": str(ROOT), "cooldown": BLOCK_COOLDOWN, "batch_size": BATCH_SIZE}
+    active_model = CFG.get("nvidia_model") if CFG.get("provider") == "nvidia" else CFG.get("local_model")
+    return {
+        "ok": True,
+        "asr": ASR_ID,
+        "llm": active_model,
+        "provider": CFG.get("provider", "nvidia"),
+        "root": str(ROOT),
+        "cooldown": BLOCK_COOLDOWN,
+        "batch_size": BATCH_SIZE
+    }
 
 @app.api_route("/config", methods=["GET", "POST"])
 def config(cooldown: float = None, batch_size: int = None):
@@ -762,29 +960,70 @@ def preflight():
     problems = []
     if not shutil.which("ffmpeg"):
         problems.append("ffmpeg not found on PATH (winget install Gyan.FFmpeg, then reopen the terminal)")
-    try:
-        r = requests.get(LLM_URL.rsplit("/", 2)[0] + "/models", timeout=5)
-        ids = [m.get("id", "") for m in r.json().get("data", [])]
-        if LLM_MODEL not in ids:
+
+    provider = CFG.get("provider", "nvidia")
+    if provider == "nvidia":
+        api_key = CFG.get("nvidia_api_key", "").strip()
+        if not api_key:
+            problems.append("NVIDIA API key not set! Please add it to server/config.json or pass NVIDIA_API_KEY.")
+        else:
+            model = CFG.get("nvidia_model", "nvidia/nemotron-3.5-bolt-e4b")
+            url = CFG.get("nvidia_url", "https://integrate.api.nvidia.com/v1/chat/completions")
+            dlog(f"[Preflight] Checking NVIDIA API connectivity (Model: {model})...")
+            try:
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                }
+                # Quick lightweight test call
+                test_body = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 2,
+                    "chat_template_kwargs": {"enable_thinking": False}
+                }
+                r = requests.post(url, headers=headers, json=test_body, timeout=12)
+                if r.status_code == 200:
+                    dlog(f"[Preflight] [OK] NVIDIA API connected and authenticated successfully!")
+                elif r.status_code in (401, 403):
+                    problems.append(f"NVIDIA API Key Rejected (HTTP {r.status_code}): Check your API key in server/config.json.")
+                elif r.status_code == 429:
+                    dlog("[Preflight] Notice: NVIDIA API rate limit active, but key is authenticated.")
+                else:
+                    dlog(f"[Preflight] Warning: NVIDIA API returned HTTP {r.status_code}: {r.text[:200]}")
+            except Exception as ex:
+                dlog(f"[Preflight] Warning: Could not reach NVIDIA API during preflight: {ex}")
+    else:
+        local_url = CFG.get("local_llm_url", "http://127.0.0.1:1234/v1/chat/completions")
+        local_model = CFG.get("local_model", "qwen3-4b-instruct-2507")
+        try:
+            r = requests.get(local_url.rsplit("/", 2)[0] + "/models", timeout=5)
+            ids = [m.get("id", "") for m in r.json().get("data", [])]
+            if local_model not in ids:
+                print_lm_warning(
+                    f"Model '{local_model}' Not Loaded in LM Studio",
+                    f"LM Studio is running, but model '{local_model}' is not loaded.",
+                    loaded=ids
+                )
+        except Exception as ex:
             print_lm_warning(
-                f"Model '{LLM_MODEL}' Not Loaded in LM Studio",
-                f"LM Studio is running, but model '{LLM_MODEL}' is not loaded.",
-                loaded=ids
+                "LM Studio is Not Connected",
+                f"LiveSubs could not reach LM Studio at {local_url} ({ex})."
             )
-    except Exception as ex:
-        print_lm_warning(
-            "LM Studio is Not Connected",
-            f"LiveSubs could not reach LM Studio at {LLM_URL} ({ex})."
-        )
+
     if problems:
         raise SystemExit("Missing requirements:\n- " + "\n- ".join(problems))
 
 if __name__ == "__main__":
+    CFG = check_or_prompt_api_key(CFG)
     preflight()
     cleanup()
-    dlog(f"LiveSubs start: ASR={ASR_ID} LLM={LLM_MODEL} CPS={CPS}")
+    active_model = CFG.get("nvidia_model") if CFG.get("provider") == "nvidia" else CFG.get("local_model")
+    active_provider = CFG.get("provider", "nvidia")
+    dlog(f"LiveSubs start: Provider={active_provider} Model={active_model} ASR={ASR_ID} CPS={CPS}")
     dlog("loading models (first run downloads them)...")
     ASR = load_asr()
     threading.Thread(target=worker, daemon=True).start()
-    dlog(f"LiveSubs ready on http://127.0.0.1:{PORT}  (LLM: {LLM_URL})")
+    dlog(f"LiveSubs ready on http://127.0.0.1:{PORT}  (Provider: {active_provider}, Model: {active_model})")
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")

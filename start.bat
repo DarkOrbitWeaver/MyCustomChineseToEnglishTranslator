@@ -1,12 +1,30 @@
 @echo off
-REM LiveSubs daily launcher. Double-click this after LM Studio is serving a model.
-REM Override defaults per window, e.g.:  set LLM_MODEL=my-model  ^&  start.bat
+REM LiveSubs Daily Launcher
+REM Supports NVIDIA API (Nemotron 3.5 Bolt E4B / Lightning) and local LM Studio.
+REM Configure settings in server\config.json or pass environment variables.
 cd /d "%~dp0server"
-if not defined ASR_MODEL set ASR_MODEL=Qwen/Qwen3-ASR-0.6B
-if not defined LLM_MODEL set LLM_MODEL=qwen3-4b-instruct-2507
-if not defined LLM_URL set LLM_URL=http://127.0.0.1:1235/v1/chat/completions
-if not defined CPS set CPS=17
-echo ASR=%ASR_MODEL%  LLM=%LLM_MODEL%  CPS=%CPS%
-echo LLM_URL=%LLM_URL%
+
+if not exist "config.json" (
+    if exist "config.example.json" (
+        copy "config.example.json" "config.json" >nul
+        echo [LiveSubs] Created server\config.json from template.
+    )
+)
+
+if not exist ".venv\Scripts\python.exe" (
+    echo [!] Virtual environment not found. Please run setup.bat first!
+    pause
+    exit /b 1
+)
+
+echo ======================================================================
+echo  LiveSubs Backend Starting...
+echo  Config: server\config.json
+echo ======================================================================
+
 .\.venv\Scripts\python.exe -u server.py
+if errorlevel 1 (
+    echo.
+    echo LiveSubs stopped with an error. Check dev.log or console output above.
+)
 pause

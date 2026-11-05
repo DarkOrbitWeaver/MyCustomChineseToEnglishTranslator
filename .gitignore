@@ -7,3 +7,8 @@ __pycache__/
 server/cache/
 server/.venv/
 .venv/
+server/config.json
+server/config.local.json
+.env
+.env.local
+

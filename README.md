@@ -1,111 +1,110 @@
-this shit is hard and unpolished tbh. if u really need this just ask some local ai (like: opencode) to set it for you, it be much easier since u can adjust it and improve the code yourself.
-i made this with the help of AI to help me watch some cultivation novel ai animations that dont have subs, it works for me, so:)
+# LiveSubs — Live English Subtitles for Chinese YouTube Videos
 
+LiveSubs transcribes and translates Chinese cultivation / xianxia / system-novel videos on YouTube in real time with Netflix-style cues, powered by local ASR and LLM translation (via NVIDIA NIM API or local LM Studio).
 
-# LiveSubs — live English subtitles for Chinese YouTube videos
+---
 
-I made this so I can watch Chinese cultivation / xianxia / system-novel
-animation on YouTube with readable English subtitles, generated live on my
-own PC. No paid APIs, everything runs locally.
+## ⚡ What's New: NVIDIA Nemotron API Integration
 
-## How it works (the 3 pieces)
+You can now translate subtitles using NVIDIA's cloud models (such as `nvidia/nemotron-3.5-bolt-e4b` or `nvidia/nemotron-3.5-lightning-30b-a3b`):
+- **Zero VRAM Contention:** Your local GPU (e.g. RTX 3050 8 GB) is 100% dedicated to ASR speech transcription.
+- **Ultra-Fast & Accurate:** Nemotron 3.5 Bolt (effective 4B active) and Nemotron 3.5 Lightning (30B MoE with 3B active) offer punchy fansub translations and handle complex cultivation lore with ease.
+- **Automatic Throttling & Backoff:** Built-in sliding-window rate limiter respects NVIDIA's 40 RPM free tier cap, with exponential backoff on HTTP 429.
+- **Local Fallback:** You can still use local LM Studio anytime without changing code.
 
-1. **Backend (`server/`)** — downloads the full audio track once per video
-   (background, ~1 min), then slices it locally per 60-second block. Each
-   block is transcribed (Qwen3-ASR), translated to English with a local LLM,
-   and served as Netflix-style subtitle cues on `http://127.0.0.1:8765`.
-2. **Translator brain (LM Studio)** — any small non-thinking instruct model.
-   It only translates text, it never touches audio.
-3. **Chrome extension (`extension/`)** — in-player dark panel with subtitle
-   controls, download progress bar, and style presets. Yellow marks on the
-   seek bar show which minutes are already translated.
+---
 
-## What you need (hardware / software)
+## How It Works (The 3 Pieces)
 
-- **Windows 10/11 PC with an NVIDIA GPU.** The transcriber + translator share
-  VRAM: ~3 GB for audio + ~2.5 GB for a 4B translator fits an **8 GB card**
-  (tested on an RTX 3050). 6 GB cards: use the 0.6B audio model and a 3B
-  translator. No NVIDIA GPU = this will not run.
-- **Python 3.12 or 3.13** (windows installer, tick "Add to PATH").
-- **ffmpeg**: `winget install Gyan.FFmpeg`
-- **Node.js LTS** (needed by yt-dlp to read YouTube pages).
-- **LM Studio** (free) + one small instruct model (see below).
-- **Chrome** (or any Chromium browser).
+1. **Backend (`server/`)**:
+   - Downloads video audio once via `yt-dlp` into `server/cache/<videoId>/`.
+   - Slices audio into 60-second blocks using `ffmpeg`.
+   - Transcribes speech and generates word-level timestamps using `Qwen3-ASR` + `ForcedAligner`.
+   - Translates lines to English via NVIDIA Nemotron API or local LM Studio.
+   - Shapes subtitle lines into natural 1-line clauses and serves cues on `http://127.0.0.1:8765`.
+2. **Translation Engine**:
+   - **NVIDIA NIM API (Recommended):** `nvidia/nemotron-3.5-bolt-e4b` or `nvidia/nemotron-3.5-lightning-30b-a3b`.
+   - **LM Studio (Local Fallback):** Any local instruct model (e.g. `qwen3-4b-instruct-2507`).
+3. **Chrome Extension (`extension/`)**:
+   - In-player panel on YouTube with subtitle controls, styling presets, export to `.srt`, and visual timeline indicators.
 
-## Setup — first time only
+---
 
-**1. Download this folder and double-click `setup.bat`.**
-It creates `server/.venv` and installs everything (~4 GB, 10–20 min).
-First backend start also downloads the audio models (~5 GB) — once, then
-they're cached.
+## Hardware & System Requirements
 
-**2. LM Studio — load the translator.**
-- Download a small **non-thinking instruct** model. Good picks:
-  - `Qwen3-4B-Instruct-2507` Q4_K_M (~2.5 GB) — fits easily next to the audio models. (recommended!!)
-  - `Qwen2.5-7B-Instruct` Q4_K_M (~4.7 GB) — better English, tight on 8 GB.
-  - Skip anything with "Thinking" or "R1" in the name.
-- Settings: port **1234**, context **4096**, full GPU offload for the 4B,
-  flash attention on, just-in-time loading off.
-- Press **Start Server**. Check `http://127.0.0.1:1234/v1/models` in a
-  browser — you should see your model id, e.g. `qwen3-4b-instruct-2507`.
+- **GPU:** NVIDIA GPU with 6+ GB VRAM (RTX 3050 tested and recommended).
+- **Python:** Python 3.12 or 3.13 (with PATH enabled).
+- **ffmpeg:** `winget install Gyan.FFmpeg`
+- **Node.js LTS:** Required by yt-dlp to extract YouTube streams.
+- **Browser:** Chrome, Brave, Edge, or any Chromium browser.
 
-**3. Start the backend — double-click `start.bat`.**
-Wait for `LiveSubs ready on http://127.0.0.1:8765`. If you picked a different
-model than the default, set it first:
-`set LLM_MODEL=your-model-id-here` then run `start.bat` from that window.
-(Tight on VRAM? `set ASR_MODEL=Qwen/Qwen3-ASR-0.6B` — that's already the default.)
+---
 
-**4. Load the extension.**
-`chrome://extensions` → Developer mode → Load unpacked → pick the
-`extension` folder. Pin the LiveSubs icon (amber 字→A bubble). Open a
-Chinese video, click the LiveSubs button in the player bar or the toolbar
-icon, and tick **Enable**.
+## Setup (First Time Only)
 
-## Daily use
+### 1. Install Dependencies & Pre-Download Models
+Double-click `setup.bat`. This will:
+- Create `server/.venv`
+- Install PyTorch with CUDA 12.4
+- Install Python requirements (`fastapi`, `uvicorn`, `requests`, `yt-dlp`, `qwen-asr`, `huggingface_hub`)
+- Automatically pre-download the ASR speech models (`Qwen/Qwen3-ASR-0.6B` and `Qwen/Qwen3-ForcedAligner-0.6B`)
 
-1. LM Studio → load model → Start Server.
-2. Double-click `start.bat`, wait for `LiveSubs ready`.
-3. YouTube → click the LiveSubs button in the player bar → Enable.
-4. The audio downloads in the background (progress bar in the panel, ~1–2 min
-   for a 2-hour video). Once done, blocks start processing (~30s each).
-5. Yellow marks on the seek bar show translated minutes. Subs appear
-   automatically as you watch.
-6. Style the subs in the panel: size, color, background, text edge, presets.
+### 2. Configure Translation (NVIDIA API or Local LM Studio)
 
-## Tuning
+LiveSubs creates a local, git-ignored configuration file at `server/config.json`:
 
-- **Word list**: `server/glossary/*.txt`, one `中文 = English` per line
-  (~960 cultivation terms included). Only terms that appear in a block of
-  audio get sent to the translator. Edit the files any time — they reload
-  automatically, no restart needed.
-- **Reading speed**: default is Netflix timing. If you watch at 2x, run
-  `set CPS=10` before `start.bat` so lines stay up longer, and delete that
-  video's folder in `server/cache/` so old timings rebuild.
-- **Subtitle cache**: `server/cache/<videoId>/` — `full.webm` (downloaded
-  audio) + `<block>.json` (translated cues). Kept for 30 days, cleaned on
-  launch. Re-opening a video you watched last week = instant subs.
-
-## If something breaks
-
-- `offline — click to retry`: backend or LM Studio isn't running. Start both.
-- First block takes ~30s after audio download: normal (ASR + translation).
-- `yt-dlp` / `ffmpeg` errors: update yt-dlp (`pip install -U yt-dlp`) and make
-  sure ffmpeg + Node.js are installed.
-- Out of VRAM / CUDA errors: smaller translator (3–4B), and
-  `ASR_MODEL=Qwen/Qwen3-ASR-0.6B`.
-- Weird English for a name/term: add it to the right `server/glossary/` file.
-- LM Studio context too high: set to **4096** (not higher — wastes VRAM).
-
-## Project layout
-
-```
-setup.bat / start.bat   one-time setup + daily launcher (Windows)
-server/server.py        backend: audio → transcribe → translate → cues (:8765)
-server/requirements.txt python deps (torch with CUDA first, see setup.bat)
-server/glossary/        Chinese → English term lists (*.txt)
-server/cache/           per-video audio + translated blocks (auto-created)
-extension/              Chrome extension (in-player panel + popup)
-extension/icons/        Extension icon set (SVG source + PNGs)
+```json
+{
+  "provider": "nvidia",
+  "nvidia_api_key": "nvapi-YOUR-KEY-HERE",
+  "nvidia_model": "nvidia/nemotron-3.5-bolt-e4b",
+  "enable_thinking": false,
+  "rate_limit_rpm": 30,
+  "local_llm_url": "http://127.0.0.1:1234/v1/chat/completions",
+  "local_model": "qwen3-4b-instruct-2507",
+  "asr_model": "Qwen/Qwen3-ASR-0.6B",
+  "align_model": "Qwen/Qwen3-ForcedAligner-0.6B",
+  "cps": 17.0,
+  "block_cooldown": 5.0,
+  "batch_size": 12
+}
 ```
 
-Made for late-night cultivation binges. 欢迎来到修仙世界.
+- **To use NVIDIA API:** Paste your NVIDIA API key into `"nvidia_api_key"`. (Alternatively, leave it blank and `start.bat` will prompt you on launch and save it locally for you!)
+- **To switch to Local LM Studio:** Set `"provider": "local"` in `server/config.json` and start your LM Studio local server on port 1234.
+
+### 3. Start the Backend
+Double-click `start.bat`.
+Wait for `LiveSubs ready on http://127.0.0.1:8765`.
+
+### 4. Load the Chrome Extension
+1. Open `chrome://extensions`.
+2. Toggle on **Developer mode** (top right).
+3. Click **Load unpacked** and select the `extension/` folder in this repo.
+4. Pin the LiveSubs icon (amber 字→A bubble).
+5. Open any Chinese video on YouTube, click the LiveSubs icon or the in-player button, and check **Enable**.
+
+---
+
+## Tuning & Customization
+
+- **Cultivation Glossary:** `server/glossary/*.txt` contains ~960 xianxia/cultivation terms. Format: `中文 = English`. Edits reload automatically without restarting the server.
+- **Reading Speed:** Default `CPS` (characters per second) is 17. If you watch at 2x speed, set `cps: 10` in `config.json` so lines stay up longer.
+- **Subtitle Cache:** Subtitles and full audio are cached in `server/cache/<videoId>/`. Cached blocks reload instantly on re-watch.
+- **Exporting Subtitles:** Click **Export .SRT** inside the YouTube player panel to download the complete English subtitles.
+
+---
+
+## Project Structure
+
+```
+start.bat                  Daily launcher (Windows)
+setup.bat                  One-time setup script
+server/server.py           Main backend server (FastAPI, ASR, LLM, Cue shaping)
+server/download_models.py  Standalone script to pre-cache ASR models
+server/config.example.json Template config file
+server/config.json         Your local config (git-ignored, holds your API key)
+server/glossary/           Domain glossaries (cultivation terms, realms, techniques)
+server/cache/              Local audio and subtitle cache (auto-created)
+extension/                 Chrome extension (V3 manifest, content script, player panel)
+```
