@@ -1,5 +1,5 @@
 @echo off
-REM LiveSubs one-time setup: creates server\.venv, installs packages, and caches ASR models.
+REM LiveSubs one-time setup: creates server\.venv, installs packages via fast uv installer, and caches ASR models.
 REM Needs: Python 3.12/3.13 + ffmpeg + Node.js already installed (see README).
 cd /d "%~dp0server"
 
@@ -9,13 +9,13 @@ if not exist ".venv" (
 )
 
 call .venv\Scripts\activate.bat
-python -m pip install --upgrade pip
+python -m pip install --upgrade pip uv
 
-echo [LiveSubs] Installing PyTorch with CUDA 12.4...
-pip install torch --index-url https://download.pytorch.org/whl/cu124
+echo [LiveSubs] Installing PyTorch with CUDA 12.4 via uv...
+uv pip install torch --index-url https://download.pytorch.org/whl/cu124
 
-echo [LiveSubs] Installing project requirements...
-pip install -r requirements.txt
+echo [LiveSubs] Installing project requirements via uv...
+uv pip install -r requirements.txt
 
 if not exist "config.json" (
     if exist "config.example.json" (
