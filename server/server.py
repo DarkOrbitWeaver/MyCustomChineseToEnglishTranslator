@@ -316,10 +316,13 @@ def grab(vid, a, b, outdir: Path):
 def load_asr():
     import torch
     from qwen_asr import Qwen3ASRModel
+    device = "cuda:0" if (torch is not None and torch.cuda.is_available()) else "cpu"
+    dtype = torch.bfloat16 if (torch is not None and torch.cuda.is_available()) else torch.float32
+    dlog(f"[ASR] Loading {ASR_ID} on device={device} (dtype={dtype})...")
     return Qwen3ASRModel.from_pretrained(
-        ASR_ID, dtype=torch.bfloat16, device_map="cuda:0", max_new_tokens=1024,
+        ASR_ID, dtype=dtype, device_map=device, max_new_tokens=1024,
         forced_aligner=ALIGN_ID,
-        forced_aligner_kwargs=dict(dtype=torch.bfloat16, device_map="cuda:0"))
+        forced_aligner_kwargs=dict(dtype=dtype, device_map=device))
 
 def clause_split(s, limit=36):
     """split very long unpunctuated runs at commas"""
