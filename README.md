@@ -2,6 +2,17 @@ this shit is hard and unpolished tbh. if u really need this just ask some local 
 i made this with the help of AI to help me watch some cultivation novel ai animations that dont have subs, it works for me, so:)
 
 
+
+
+
+
+
+its really a mess tbh, but if u insist here some ai yap that might help you: 
+
+
+
+
+
 # LiveSubs — live English subtitles for Chinese YouTube videos
 
 I made this so I can watch Chinese cultivation / xianxia / system-novel
