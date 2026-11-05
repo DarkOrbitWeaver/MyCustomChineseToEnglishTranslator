@@ -22,6 +22,9 @@ echo  LiveSubs Backend Starting...
 echo  Config: server\config.json
 echo ======================================================================
 
+set HF_HUB_DISABLE_XET=1
+set HF_HUB_ENABLE_HF_TRANSFER=0
+
 .\.venv\Scripts\python.exe -u server.py
 if errorlevel 1 (
     echo.

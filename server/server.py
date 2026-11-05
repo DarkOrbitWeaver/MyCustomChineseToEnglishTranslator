@@ -2,6 +2,8 @@
 Run: python server.py   (listens on 127.0.0.1:8765)
 """
 import os, re, json, sys, time, wave, shutil, threading, tempfile, subprocess, textwrap, traceback
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 from pathlib import Path
 import requests, uvicorn
 try:

@@ -3,6 +3,9 @@ Downloads and caches Qwen3-ASR and ForcedAligner models locally using huggingfac
 Usage:
   python download_models.py [--model Qwen/Qwen3-ASR-0.6B] [--aligner Qwen/Qwen3-ForcedAligner-0.6B]
 """
+import os
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 import sys
 import argparse
 from huggingface_hub import snapshot_download
